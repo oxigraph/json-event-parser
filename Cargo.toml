@@ -1,0 +1,21 @@
+[package]
+name = "json-event-parser"
+version = "0.1.0"
+authors = ["Tpt <thomas@pellissier-tanon.fr>"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+keywords = ["JSON"]
+repository = ""
+homepage = ""
+description = """
+A JSON event parser and serializer
+"""
+edition = "2018"
+
+[dev-dependencies]
+criterion = "0.3"
+serde_json = "1"
+
+[[bench]]
+name = "test_suite"
+harness = false
