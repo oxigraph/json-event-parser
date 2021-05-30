@@ -5,8 +5,8 @@ authors = ["Tpt <thomas@pellissier-tanon.fr>"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 keywords = ["JSON"]
-repository = ""
-homepage = ""
+repository = "https://github.com/oxigraph/json-event-parser"
+homepage = "https://github.com/oxigraph/json-event-parser"
 description = """
 A JSON event parser and serializer
 """
