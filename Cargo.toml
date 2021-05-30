@@ -11,6 +11,7 @@ description = """
 A JSON event parser and serializer
 """
 edition = "2018"
+exclude = ["JSONTestSuite"]
 
 [dev-dependencies]
 criterion = "0.3"
