@@ -5,14 +5,6 @@ use std::str;
 
 #[test]
 fn test_testsuite_parsing() -> Result<()> {
-    let blacklist = vec![
-        "y_string_accepted_surrogate_pair.json",
-        "y_string_accepted_surrogate_pairs.json",
-        "y_string_last_surrogates_1_and_2.json",
-        "y_string_unicode_U+1FFFE_nonchar.json",
-        "y_string_unicode_U+10FFFE_nonchar.json",
-        "y_string_surrogates_U+1D11E_MUSICAL_SYMBOL_G_CLEF.json",
-    ];
     for file in read_dir(format!(
         "{}/JSONTestSuite/test_parsing",
         env!("CARGO_MANIFEST_DIR")
@@ -23,9 +15,7 @@ fn test_testsuite_parsing() -> Result<()> {
             continue;
         }
         let result = parse_result(File::open(file.path())?);
-        if blacklist.contains(&file_name.as_str()) {
-            continue;
-        } else if file_name.starts_with("y_") {
+        if file_name.starts_with("y_") {
             match result {
                 Ok(serialization) => match parse_result(serialization.as_slice()) {
                     Ok(other_serialization) => assert_eq!(serialization, other_serialization),

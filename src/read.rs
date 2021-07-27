@@ -201,9 +201,38 @@ impl<R: BufRead> JsonReader<R> {
                         b'u' => {
                             let mut buf = [0u8; 4];
                             self.reader.read_exact(&mut buf)?;
-                            output.extend_from_slice(
-                                read_hexa_char(buf)?.encode_utf8(&mut buf).as_bytes(),
-                            );
+                            let code_point = read_hexa_char(&buf)?;
+                            if let Some(c) = char::from_u32(code_point) {
+                                output.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                            } else {
+                                let high_surrogate = code_point;
+                                let mut buf = [0u8; 6];
+                                self.reader.read_exact(&mut buf)?;
+                                if !buf.starts_with(b"\\u") {
+                                    return Err(Error::new(
+                                            ErrorKind::InvalidData,
+                                            format!(
+                                                "\\u{:X} is a surrogate should be followed by an other surrogate",
+                                                high_surrogate
+                                            ),
+                                        ));
+                                }
+                                let low_surrogate = read_hexa_char(&buf[2..])?;
+                                let code_point = 0x10000
+                                    + ((high_surrogate & 0x03FF) << 10)
+                                    + (low_surrogate & 0x03FF);
+                                if let Some(c) = char::from_u32(code_point) {
+                                    output.extend_from_slice(c.encode_utf8(&mut buf).as_bytes())
+                                } else {
+                                    return Err(Error::new(
+                                        ErrorKind::InvalidData,
+                                        format!(
+                                            "\\u{:X}\\u{:X} is an invalid surrogate pair",
+                                            high_surrogate, low_surrogate
+                                        ),
+                                    ));
+                                }
+                            }
                         }
                         _ => {
                             return Err(Error::new(
@@ -489,14 +518,14 @@ fn skip_whitespaces(buf: &[u8]) -> usize {
     buf.len()
 }
 
-fn read_hexa_char(input: [u8; 4]) -> Result<char> {
+fn read_hexa_char(input: &[u8]) -> Result<u32> {
     let mut value = 0;
     for c in input.iter().copied() {
         value = value * 16
             + match c {
-                b'0'..=b'9' => u32::from(c) - u32::from('0'),
-                b'a'..=b'f' => u32::from(c) - u32::from('a') + 10,
-                b'A'..=b'F' => u32::from(c) - u32::from('A') + 10,
+                b'0'..=b'9' => u32::from(c) - u32::from(b'0'),
+                b'a'..=b'f' => u32::from(c) - u32::from(b'a') + 10,
+                b'A'..=b'F' => u32::from(c) - u32::from(b'A') + 10,
                 _ => {
                     return Err(Error::new(
                         ErrorKind::InvalidData,
@@ -505,6 +534,5 @@ fn read_hexa_char(input: [u8; 4]) -> Result<char> {
                 }
             }
     }
-    char::from_u32(value)
-        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "Invalid encoded unicode code point"))
+    Ok(value)
 }
