@@ -29,6 +29,7 @@ pub struct JsonReader<R: BufRead> {
     state_stack: Vec<JsonState>,
     element_read: bool,
     max_stack_size: Option<usize>,
+    is_start: bool,
 }
 
 impl<R: BufRead> JsonReader<R> {
@@ -38,6 +39,7 @@ impl<R: BufRead> JsonReader<R> {
             state_stack: Vec::new(),
             element_read: false,
             max_stack_size: None,
+            is_start: true,
         }
     }
 
@@ -48,6 +50,29 @@ impl<R: BufRead> JsonReader<R> {
     }
 
     pub fn read_event<'a>(&mut self, buffer: &'a mut Vec<u8>) -> Result<JsonEvent<'a>> {
+        if self.is_start {
+            // We remove BOM at the beginning
+            self.is_start = false;
+            if self.lookup_front()? == Some(0xEF) {
+                self.reader.consume(1);
+                if self.lookup_front()? == Some(0xBB) {
+                    self.reader.consume(1);
+                    if self.lookup_front()? == Some(0xBF) {
+                        self.reader.consume(1);
+                    } else {
+                        return Err(Error::new(
+                            ErrorKind::InvalidData,
+                            "Unexpected BOM at the beginning of the file",
+                        ));
+                    }
+                } else {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "Unexpected BOM at the beginning of the file",
+                    ));
+                }
+            }
+        }
         let front = if let Some(b) = self.lookup_front_skipping_whitespaces()? {
             b
         } else {
@@ -212,12 +237,30 @@ impl<R: BufRead> JsonReader<R> {
                                     return Err(Error::new(
                                             ErrorKind::InvalidData,
                                             format!(
-                                                "\\u{:X} is a surrogate should be followed by an other surrogate",
+                                                "\\u{:X} is a high surrogate and should be followed by a low surrogate",
                                                 high_surrogate
                                             ),
                                         ));
                                 }
                                 let low_surrogate = read_hexa_char(&buf[2..])?;
+                                if !(0xD800..=0xDBFF).contains(&high_surrogate) {
+                                    return Err(Error::new(
+                                        ErrorKind::InvalidData,
+                                        format!(
+                                            "\\u{:X} is not a valid high surrogate",
+                                            high_surrogate
+                                        ),
+                                    ));
+                                }
+                                if !(0xDC00..=0xDFFF).contains(&low_surrogate) {
+                                    return Err(Error::new(
+                                        ErrorKind::InvalidData,
+                                        format!(
+                                            "\\u{:X} is not a valid low surrogate",
+                                            low_surrogate
+                                        ),
+                                    ));
+                                }
                                 let code_point = 0x10000
                                     + ((high_surrogate & 0x03FF) << 10)
                                     + (low_surrogate & 0x03FF);
