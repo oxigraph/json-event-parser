@@ -10,7 +10,8 @@ homepage = "https://github.com/oxigraph/json-event-parser"
 description = """
 A JSON event parser and serializer
 """
-edition = "2018"
+edition = "2021"
+rust-version = "1.60"
 exclude = ["JSONTestSuite"]
 
 [dev-dependencies]
