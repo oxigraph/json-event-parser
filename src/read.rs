@@ -299,7 +299,7 @@ impl<R: BufRead> JsonReader<R> {
         if self.lookup_front()? == Some(b'.') {
             output.push(b'.');
             self.reader.consume(1);
-            self.read_char(|c| matches!(c, b'0'..=b'9'), output)?;
+            self.read_char(|c| c.is_ascii_digit(), output)?;
             self.read_digits(output)?;
         }
 
@@ -313,7 +313,7 @@ impl<R: BufRead> JsonReader<R> {
                     b'-' | b'+' => {
                         output.push(c);
                         self.reader.consume(1);
-                        self.read_char(|c| matches!(c, b'0'..=b'9'), output)?;
+                        self.read_char(|c| c.is_ascii_digit(), output)?;
                     }
                     b'0'..=b'9' => {
                         output.push(c);
@@ -351,7 +351,7 @@ impl<R: BufRead> JsonReader<R> {
 
     fn read_digits(&mut self, output: &mut Vec<u8>) -> Result<()> {
         while let Some(c) = self.lookup_front()? {
-            if matches!(c, b'0'..=b'9') {
+            if c.is_ascii_digit() {
                 output.push(c);
                 self.reader.consume(1);
             } else {
