@@ -11,11 +11,11 @@ description = """
 A JSON event parser and serializer
 """
 edition = "2021"
-rust-version = "1.60"
+rust-version = "1.64"
 exclude = ["JSONTestSuite"]
 
 [dev-dependencies]
-criterion = "0.4"
+criterion = "0.5"
 serde_json = "1"
 
 [[bench]]
