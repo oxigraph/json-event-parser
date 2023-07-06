@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - run: rustup update && rustup override set 1.60.0 && rustup component add clippy
+      - run: rustup update && rustup override set 1.64.0 && rustup component add clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets -- -D warnings -D clippy::all
 
@@ -51,7 +51,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - run: rustup update && rustup override set 1.60.0
+      - run: rustup update && rustup override set 1.64.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --no-deps
         env:
