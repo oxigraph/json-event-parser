@@ -4,6 +4,7 @@ version = "0.1.1"
 authors = ["Tpt <thomas@pellissier-tanon.fr>"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
+documentation = "https://docs.rs/json-event-parser"
 keywords = ["JSON"]
 repository = "https://github.com/oxigraph/json-event-parser"
 homepage = "https://github.com/oxigraph/json-event-parser"
