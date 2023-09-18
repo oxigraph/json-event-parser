@@ -1,567 +1,1010 @@
 use crate::JsonEvent;
-use std::io::{BufRead, Error, ErrorKind, Result};
-use std::str;
+use std::borrow::Cow;
+use std::cmp::{max, min};
+use std::error::Error;
+use std::io::{self, Read};
+use std::ops::Range;
+use std::{fmt, str};
+#[cfg(feature = "async-tokio")]
+use tokio::io::{AsyncRead, AsyncReadExt};
 
-/// A simple JSON streaming parser.
+const MAX_STATE_STACK_SIZE: usize = 65_536;
+const MIN_BUFFER_SIZE: usize = 4096;
+const MAX_BUFFER_SIZE: usize = 4096 * 4096;
+
+/// Parses a JSON file from a [`Read`] implementation.
 ///
-/// Does not allocate except a stack to check if array and object opening and closing are properly nested.
-/// This stack size might be limited using the method [`max_stack_size`](JsonReader::max_stack_size).
 ///
-/// Example:
-/// ```rust
-/// use json_event_parser::{JsonReader, JsonEvent};
-/// use std::io::Cursor;
+/// ```
+/// use json_event_parser::{FromReadJsonReader, JsonEvent};
 ///
-/// let json = b"{\"foo\": 1}";
-/// let mut reader = JsonReader::from_reader(Cursor::new(json));
-///
-/// let mut buffer = Vec::new();
-/// assert_eq!(JsonEvent::StartObject, reader.read_event(&mut buffer)?);
-/// assert_eq!(JsonEvent::ObjectKey("foo"), reader.read_event(&mut buffer)?);
-/// assert_eq!(JsonEvent::Number("1"), reader.read_event(&mut buffer)?);
-/// assert_eq!(JsonEvent::EndObject, reader.read_event(&mut buffer)?);
-/// assert_eq!(JsonEvent::Eof, reader.read_event(&mut buffer)?);
-///
+/// let mut reader = FromReadJsonReader::new(b"{\"foo\": 1}".as_slice());
+/// assert_eq!(reader.read_next_event()?, JsonEvent::StartObject);
+/// assert_eq!(reader.read_next_event()?, JsonEvent::ObjectKey("foo".into()));
+/// assert_eq!(reader.read_next_event()?, JsonEvent::Number("1".into()));
+/// assert_eq!(reader.read_next_event()?, JsonEvent::EndObject);
+/// assert_eq!(reader.read_next_event()?, JsonEvent::Eof);
 /// # std::io::Result::Ok(())
 /// ```
-pub struct JsonReader<R: BufRead> {
-    reader: R,
-    state_stack: Vec<JsonState>,
-    element_read: bool,
-    max_stack_size: Option<usize>,
-    is_start: bool,
+pub struct FromReadJsonReader<R: Read> {
+    input_buffer: Vec<u8>,
+    input_buffer_start: usize,
+    input_buffer_end: usize,
+    max_buffer_size: usize,
+    is_ending: bool,
+    read: R,
+    parser: LowLevelJsonReader,
 }
 
-impl<R: BufRead> JsonReader<R> {
-    pub fn from_reader(reader: R) -> Self {
+impl<R: Read> FromReadJsonReader<R> {
+    pub fn new(read: R) -> Self {
         Self {
-            reader,
+            input_buffer: Vec::with_capacity(MIN_BUFFER_SIZE),
+            input_buffer_start: 0,
+            input_buffer_end: 0,
+            max_buffer_size: MAX_BUFFER_SIZE,
+            is_ending: false,
+            read,
+            parser: LowLevelJsonReader::new(),
+        }
+    }
+
+    /// Sets the max size of the internal buffer in bytes
+    pub fn with_max_buffer_size(mut self, size: usize) -> Self {
+        self.max_buffer_size = size;
+        self
+    }
+
+    pub fn read_next_event(&mut self) -> Result<JsonEvent<'_>, ParseError> {
+        loop {
+            {
+                let LowLevelJsonReaderResult {
+                    event,
+                    consumed_bytes,
+                } = self.parser.read_next_event(
+                    #[allow(unsafe_code)]
+                    unsafe {
+                        let input_buffer_ptr: *const [u8] =
+                            &self.input_buffer[self.input_buffer_start..self.input_buffer_end];
+                        &*input_buffer_ptr
+                    }, // Borrow checker workaround https://github.com/rust-lang/rust/issues/70255
+                    self.is_ending,
+                );
+                self.input_buffer_start += consumed_bytes;
+                if let Some(event) = event {
+                    return Ok(event?);
+                }
+            }
+            if self.input_buffer_start > 0 {
+                self.input_buffer
+                    .copy_within(self.input_buffer_start..self.input_buffer_end, 0);
+                self.input_buffer_end -= self.input_buffer_start;
+                self.input_buffer_start = 0;
+            }
+            if self.input_buffer.len() == self.max_buffer_size {
+                return Err(io::Error::new(
+                    io::ErrorKind::OutOfMemory,
+                    format!(
+                        "Reached the buffer maximal size of {}",
+                        self.max_buffer_size
+                    ),
+                )
+                .into());
+            }
+            let min_end = min(
+                self.input_buffer_end + MIN_BUFFER_SIZE,
+                self.max_buffer_size,
+            );
+            if self.input_buffer.len() < min_end {
+                self.input_buffer.resize(min_end, 0);
+            }
+            if self.input_buffer.len() < self.input_buffer.capacity() {
+                // We keep extending to have as much space as available without reallocation
+                self.input_buffer.resize(self.input_buffer.capacity(), 0);
+            }
+            let read = self
+                .read
+                .read(&mut self.input_buffer[self.input_buffer_end..])?;
+            self.input_buffer_end += read;
+            self.is_ending = read == 0;
+        }
+    }
+}
+
+/// Parses a JSON file from a [`Read`] implementation.
+///
+/// ```
+/// use json_event_parser::{FromTokioAsyncReadJsonReader, JsonEvent};
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> ::std::io::Result<()> {
+/// let mut reader = FromTokioAsyncReadJsonReader::new(b"{\"foo\": 1}".as_slice());
+/// assert_eq!(reader.read_next_event().await?, JsonEvent::StartObject);
+/// assert_eq!(reader.read_next_event().await?, JsonEvent::ObjectKey("foo".into()));
+/// assert_eq!(reader.read_next_event().await?, JsonEvent::Number("1".into()));
+/// assert_eq!(reader.read_next_event().await?, JsonEvent::EndObject);
+/// assert_eq!(reader.read_next_event().await?, JsonEvent::Eof);
+/// # Ok(())
+/// # }
+/// ```
+#[cfg(feature = "async-tokio")]
+pub struct FromTokioAsyncReadJsonReader<R: AsyncRead + Unpin> {
+    input_buffer: Vec<u8>,
+    input_buffer_start: usize,
+    input_buffer_end: usize,
+    max_buffer_size: usize,
+    is_ending: bool,
+    read: R,
+    parser: LowLevelJsonReader,
+}
+
+#[cfg(feature = "async-tokio")]
+impl<R: AsyncRead + Unpin> FromTokioAsyncReadJsonReader<R> {
+    pub fn new(read: R) -> Self {
+        Self {
+            input_buffer: Vec::with_capacity(MIN_BUFFER_SIZE),
+            input_buffer_start: 0,
+            input_buffer_end: 0,
+            max_buffer_size: MAX_BUFFER_SIZE,
+            is_ending: false,
+            read,
+            parser: LowLevelJsonReader::new(),
+        }
+    }
+
+    /// Sets the max size of the internal buffer in bytes
+    pub fn with_max_buffer_size(mut self, size: usize) -> Self {
+        self.max_buffer_size = size;
+        self
+    }
+
+    pub async fn read_next_event(&mut self) -> Result<JsonEvent<'_>, ParseError> {
+        loop {
+            {
+                let LowLevelJsonReaderResult {
+                    event,
+                    consumed_bytes,
+                } = self.parser.read_next_event(
+                    #[allow(unsafe_code)]
+                    unsafe {
+                        let input_buffer_ptr: *const [u8] =
+                            &self.input_buffer[self.input_buffer_start..self.input_buffer_end];
+                        &*input_buffer_ptr
+                    }, // Borrow checker workaround https://github.com/rust-lang/rust/issues/70255
+                    self.is_ending,
+                );
+                self.input_buffer_start += consumed_bytes;
+                if let Some(event) = event {
+                    return Ok(event?);
+                }
+            }
+            if self.input_buffer_start > 0 {
+                self.input_buffer
+                    .copy_within(self.input_buffer_start..self.input_buffer_end, 0);
+                self.input_buffer_end -= self.input_buffer_start;
+                self.input_buffer_start = 0;
+            }
+            if self.input_buffer.len() == self.max_buffer_size {
+                return Err(io::Error::new(
+                    io::ErrorKind::OutOfMemory,
+                    format!(
+                        "Reached the buffer maximal size of {}",
+                        self.max_buffer_size
+                    ),
+                )
+                .into());
+            }
+            let min_end = min(
+                self.input_buffer_end + MIN_BUFFER_SIZE,
+                self.max_buffer_size,
+            );
+            if self.input_buffer.len() < min_end {
+                self.input_buffer.resize(min_end, 0);
+            }
+            if self.input_buffer.len() < self.input_buffer.capacity() {
+                // We keep extending to have as much space as available without reallocation
+                self.input_buffer.resize(self.input_buffer.capacity(), 0);
+            }
+            let read = self
+                .read
+                .read(&mut self.input_buffer[self.input_buffer_end..])
+                .await?;
+            self.input_buffer_end += read;
+            self.is_ending = read == 0;
+        }
+    }
+}
+
+/// Parses a JSON file from a `&[u8]`.
+///
+/// ```
+/// use json_event_parser::{FromBufferJsonReader, JsonEvent};
+///
+/// let mut reader = FromBufferJsonReader::new(b"{\"foo\": 1}");
+/// assert_eq!(reader.read_next_event()?, JsonEvent::StartObject);
+/// assert_eq!(reader.read_next_event()?, JsonEvent::ObjectKey("foo".into()));
+/// assert_eq!(reader.read_next_event()?, JsonEvent::Number("1".into()));
+/// assert_eq!(reader.read_next_event()?, JsonEvent::EndObject);
+/// assert_eq!(reader.read_next_event()?, JsonEvent::Eof);
+/// # std::io::Result::Ok(())
+/// ```
+pub struct FromBufferJsonReader<'a> {
+    input_buffer: &'a [u8],
+    parser: LowLevelJsonReader,
+}
+
+impl<'a> FromBufferJsonReader<'a> {
+    pub fn new(buffer: &'a [u8]) -> Self {
+        Self {
+            input_buffer: buffer,
+            parser: LowLevelJsonReader::new(),
+        }
+    }
+
+    pub fn read_next_event(&mut self) -> Result<JsonEvent<'_>, SyntaxError> {
+        loop {
+            let LowLevelJsonReaderResult {
+                event,
+                consumed_bytes,
+            } = self.parser.read_next_event(self.input_buffer, true);
+            self.input_buffer = &self.input_buffer[consumed_bytes..];
+            if let Some(event) = event {
+                return event;
+            }
+        }
+    }
+}
+
+/// A low-level JSON parser acting on a provided buffer.
+///
+/// Does not allocate except a stack to check if array and object opening and closing are properly nested.
+/// This stack size might be limited using the method [`with_max_stack_size`](LowLevelJsonReader::with_max_stack_size).
+///
+/// ```
+/// # use std::borrow::Cow;
+/// use json_event_parser::{LowLevelJsonReader, JsonEvent, LowLevelJsonReaderResult};
+///
+/// let mut reader = LowLevelJsonReader::new();
+/// assert!(matches!(
+///     reader.read_next_event(b"{\"foo".as_slice(), false),
+///     LowLevelJsonReaderResult { consumed_bytes: 1, event: Some(Ok(JsonEvent::StartObject))}
+/// ));
+/// assert!(matches!(
+///     reader.read_next_event(b"\"foo".as_slice(), false),
+///     LowLevelJsonReaderResult { consumed_bytes: 0, event: None }
+/// ));
+/// assert!(matches!(
+///     reader.read_next_event(b"\"foo\": 1}".as_slice(), false),
+///     LowLevelJsonReaderResult { consumed_bytes: 5, event: Some(Ok(JsonEvent::ObjectKey(Cow::Borrowed("foo")))) }
+/// ));
+/// assert!(matches!(
+///     reader.read_next_event(b": 1}".as_slice(), false),
+///     LowLevelJsonReaderResult { consumed_bytes: 3, event: Some(Ok(JsonEvent::Number(Cow::Borrowed("1")))) }
+/// ));
+/// assert!(matches!(
+///     reader.read_next_event(b"}".as_slice(), false),
+///     LowLevelJsonReaderResult { consumed_bytes: 1, event: Some(Ok(JsonEvent::EndObject)) }
+/// ));
+/// assert!(matches!(
+///     reader.read_next_event(b"".as_slice(), true),
+///     LowLevelJsonReaderResult { consumed_bytes: 0, event: Some(Ok(JsonEvent::Eof)) }
+/// ));
+/// # std::io::Result::Ok(())
+/// ```
+pub struct LowLevelJsonReader {
+    lexer: JsonLexer,
+    state_stack: Vec<JsonState>,
+    max_state_stack_size: usize,
+    element_read: bool,
+}
+
+impl LowLevelJsonReader {
+    pub const fn new() -> Self {
+        Self {
+            lexer: JsonLexer {
+                file_offset: 0,
+                file_line: 0,
+                file_start_of_last_line: 0,
+                is_start: true,
+            },
             state_stack: Vec::new(),
+            max_state_stack_size: MAX_STATE_STACK_SIZE,
             element_read: false,
-            max_stack_size: None,
-            is_start: true,
         }
     }
 
     /// Maximal allowed number of nested object and array openings. Infinite by default.
-    pub fn max_stack_size(&mut self, size: usize) -> &mut Self {
-        self.max_stack_size = Some(size);
+    pub fn with_max_stack_size(mut self, size: usize) -> Self {
+        self.max_state_stack_size = size;
         self
     }
 
-    pub fn read_event<'a>(&mut self, buffer: &'a mut Vec<u8>) -> Result<JsonEvent<'a>> {
-        if self.is_start {
-            // We remove BOM at the beginning
-            self.is_start = false;
-            if self.lookup_front()? == Some(0xEF) {
-                self.reader.consume(1);
-                if self.lookup_front()? == Some(0xBB) {
-                    self.reader.consume(1);
-                    if self.lookup_front()? == Some(0xBF) {
-                        self.reader.consume(1);
-                    } else {
-                        return Err(Error::new(
-                            ErrorKind::InvalidData,
-                            "Unexpected BOM at the beginning of the file",
-                        ));
+    /// Reads a new event from the data in `input_buffer`.
+    ///
+    /// `is_ending` must be set to true if all the JSON data have been already consumed or are in `input_buffer`.
+    pub fn read_next_event<'a>(
+        &mut self,
+        input_buffer: &'a [u8],
+        is_ending: bool,
+    ) -> LowLevelJsonReaderResult<'a> {
+        let start_file_offset = self.lexer.file_offset;
+        while let Some(event) = self.lexer.read_next_token(
+            &input_buffer[usize::try_from(self.lexer.file_offset - start_file_offset).unwrap()..],
+            is_ending,
+        ) {
+            let consumed_bytes = (self.lexer.file_offset - start_file_offset)
+                .try_into()
+                .unwrap();
+            match event {
+                Ok(token) => {
+                    if let Some(event) = self.apply_new_token(token) {
+                        return LowLevelJsonReaderResult {
+                            consumed_bytes,
+                            event: Some(event.map_err(|e| {
+                                self.lexer
+                                    .syntax_error(start_file_offset..self.lexer.file_offset, e)
+                            })),
+                        };
                     }
-                } else {
-                    return Err(Error::new(
-                        ErrorKind::InvalidData,
-                        "Unexpected BOM at the beginning of the file",
-                    ));
+                }
+                Err(error) => {
+                    return LowLevelJsonReaderResult {
+                        consumed_bytes,
+                        event: Some(Err(error)),
+                    }
                 }
             }
         }
-        let front = if let Some(b) = self.lookup_front_skipping_whitespaces()? {
-            b
-        } else {
-            return if self.state_stack.is_empty() && self.element_read {
-                Ok(JsonEvent::Eof)
+        LowLevelJsonReaderResult {
+            consumed_bytes: (self.lexer.file_offset - start_file_offset)
+                .try_into()
+                .unwrap(),
+            event: if is_ending {
+                Some(Err(self.lexer.syntax_error(
+                    self.lexer.file_offset..self.lexer.file_offset + 1,
+                    "Unexpected end of file",
+                )))
             } else {
-                Err(Error::from(ErrorKind::UnexpectedEof))
-            };
-        };
-        match front {
-            b'{' => {
-                self.reader.consume(1);
-                self.check_stack_size()?;
-                self.state_stack.push(JsonState::FirstObjectKey);
-                Ok(JsonEvent::StartObject)
-            }
-            b'}' => {
-                self.reader.consume(1);
-                if matches!(
-                    self.state_stack.pop(),
-                    Some(JsonState::FirstObjectKey) | Some(JsonState::LastObjectKey)
-                ) {
-                    self.read_after_value(JsonEvent::EndObject)
+                None
+            },
+        }
+    }
+
+    fn apply_new_token<'a>(
+        &mut self,
+        token: JsonToken<'a>,
+    ) -> Option<Result<JsonEvent<'a>, String>> {
+        match self.state_stack.pop() {
+            Some(JsonState::ObjectKeyOrEnd) => {
+                if token == JsonToken::ClosingCurlyBracket {
+                    Some(Ok(JsonEvent::EndObject))
                 } else {
-                    Err(Error::new(
-                        ErrorKind::InvalidData,
-                        "Closing a not opened object",
-                    ))
+                    if let Err(e) = self.push_state_stack(JsonState::ObjectKey) {
+                        return Some(Err(e));
+                    }
+                    self.apply_new_token(token)
                 }
             }
-            b'[' => {
-                self.reader.consume(1);
-                self.check_stack_size()?;
-                self.state_stack.push(JsonState::FirstArray);
-                Ok(JsonEvent::StartArray)
-            }
-            b']' => {
-                self.reader.consume(1);
-                if matches!(
-                    self.state_stack.pop(),
-                    Some(JsonState::FirstArray) | Some(JsonState::LastArray)
-                ) {
-                    self.read_after_value(JsonEvent::EndArray)
+            Some(JsonState::ObjectKey) => {
+                if let Err(e) = self.push_state_stack(JsonState::ObjectColon) {
+                    return Some(Err(e));
+                }
+                Some(if let JsonToken::String(key) = token {
+                    Ok(JsonEvent::ObjectKey(key))
                 } else {
-                    Err(Error::new(
-                        ErrorKind::InvalidData,
-                        "Closing a not opened array",
-                    ))
+                    Err("Object keys must be strings".into())
+                })
+            }
+            Some(JsonState::ObjectColon) => {
+                if let Err(e) = self.push_state_stack(JsonState::ObjectValue) {
+                    return Some(Err(e));
+                }
+                if token == JsonToken::Colon {
+                    None
+                } else {
+                    Some(Err("Object keys must be strings".into()))
                 }
             }
-            b'"' => self.parse_string(buffer),
-            b't' => self.parse_constant::<4>("true", JsonEvent::Boolean(true)),
-            b'f' => self.parse_constant::<5>("false", JsonEvent::Boolean(false)),
-            b'n' => self.parse_constant::<4>("null", JsonEvent::Null),
-            b'-' | b'0'..=b'9' => self.parse_number(front, buffer),
-            c => {
-                self.reader.consume(1);
-                Err(Error::new(
-                    ErrorKind::InvalidData,
-                    format!("Unexpected char: {}", char::from(c)),
-                ))
+            Some(JsonState::ObjectValue) => {
+                if let Err(e) = self.push_state_stack(JsonState::ObjectCommaOrEnd) {
+                    return Some(Err(e));
+                }
+                Some(self.apply_new_token_for_value(token))
+            }
+            Some(JsonState::ObjectCommaOrEnd) => match token {
+                JsonToken::Comma => {
+                    if let Err(e) = self.push_state_stack(JsonState::ObjectKey) {
+                        return Some(Err(e));
+                    }
+                    None
+                }
+                JsonToken::ClosingCurlyBracket => Some(Ok(JsonEvent::EndObject)),
+                _ => Some(Err("Object values must be followed by a comma to add a new value or a curly bracket to end the object".into())),
+            },
+            Some(JsonState::ArrayValueOrEnd) =>{
+                if token == JsonToken::ClosingSquareBracket {
+                    Some(Ok(JsonEvent::EndArray))
+                } else {
+                    if let Err(e) = self.push_state_stack(JsonState::ArrayValue) {
+                        return Some(Err(e));
+                    }
+                    self.apply_new_token(token)
+                }
+            }
+            Some(JsonState::ArrayValue) => {
+                if let Err(e) = self.push_state_stack(JsonState::ArrayCommaOrEnd) {
+                    return Some(Err(e));
+                }
+                Some(self.apply_new_token_for_value(token))
+            }
+            Some(JsonState::ArrayCommaOrEnd) => match token {
+                JsonToken::Comma => {
+                    if let Err(e) = self.push_state_stack(JsonState::ArrayValue) {
+                        return Some(Err(e));
+                    }
+                    None
+                }
+                JsonToken::ClosingSquareBracket => Some(Ok(JsonEvent::EndArray)),
+                _ => Some(Err("Array values must be followed by a comma to add a new value or a squared bracket to end the array".into())),
+            }
+            None =>
+                if self.element_read {
+                    Some(if token == JsonToken::Eof {
+                        Ok(JsonEvent::Eof)
+                    } else {
+                        Err("The JSON already contains one root element".into())
+                    })
+            } else {
+                self.element_read = true;
+                Some(self.apply_new_token_for_value(token))
             }
         }
     }
 
-    fn parse_string<'a>(&mut self, output: &'a mut Vec<u8>) -> Result<JsonEvent<'a>> {
-        output.clear();
-        self.reader.consume(1);
+    fn apply_new_token_for_value<'a>(
+        &mut self,
+        token: JsonToken<'a>,
+    ) -> Result<JsonEvent<'a>, String> {
+        match token {
+            JsonToken::OpeningSquareBracket => {
+                self.push_state_stack(JsonState::ArrayValueOrEnd)?;
+                Ok(JsonEvent::StartArray)
+            }
+            JsonToken::ClosingSquareBracket => {
+                Err("Unexpected closing square bracket, no array to close".into())
+            }
+            JsonToken::OpeningCurlyBracket => {
+                self.push_state_stack(JsonState::ObjectKeyOrEnd)?;
+                Ok(JsonEvent::StartObject)
+            }
+            JsonToken::ClosingCurlyBracket => {
+                Err("Unexpected closing curly bracket, no array to close".into())
+            }
+            JsonToken::Comma => Err("Unexpected comma, no values to separate".into()),
+            JsonToken::Colon => Err("Unexpected colon, no key to follow".into()),
+            JsonToken::String(string) => Ok(JsonEvent::String(string)),
+            JsonToken::Number(number) => Ok(JsonEvent::Number(number)),
+            JsonToken::True => Ok(JsonEvent::Boolean(true)),
+            JsonToken::False => Ok(JsonEvent::Boolean(false)),
+            JsonToken::Null => Ok(JsonEvent::Null),
+            JsonToken::Eof => Err("Unexpected end of file, a value was expected".into()),
+        }
+    }
 
-        #[derive(Eq, PartialEq, Copy, Clone)]
-        enum StringState {
-            Default,
-            Escape,
+    fn push_state_stack(&mut self, state: JsonState) -> Result<(), String> {
+        self.check_stack_size()?;
+        self.state_stack.push(state);
+        Ok(())
+    }
+
+    fn check_stack_size(&self) -> Result<(), String> {
+        if self.state_stack.len() > self.max_state_stack_size {
+            Err(format!(
+                "Max stack size of {} reached on an object opening",
+                self.max_state_stack_size
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Eq, PartialEq, Copy, Clone, Debug)]
+enum JsonState {
+    ObjectKey,
+    ObjectKeyOrEnd,
+    ObjectColon,
+    ObjectValue,
+    ObjectCommaOrEnd,
+    ArrayValue,
+    ArrayValueOrEnd,
+    ArrayCommaOrEnd,
+}
+
+#[derive(Eq, PartialEq, Clone, Debug)]
+enum JsonToken<'a> {
+    OpeningSquareBracket, // [
+    ClosingSquareBracket, // ]
+    OpeningCurlyBracket,  // {
+    ClosingCurlyBracket,  // }
+    Comma,                // ,
+    Colon,                // :
+    String(Cow<'a, str>), // "..."
+    Number(Cow<'a, str>), // 1.2e3
+    True,                 // true
+    False,                // false
+    Null,                 // null
+    Eof,                  // EOF
+}
+
+struct JsonLexer {
+    file_offset: u64,
+    file_line: u64,
+    file_start_of_last_line: u64,
+    is_start: bool,
+}
+
+impl JsonLexer {
+    fn read_next_token<'a>(
+        &mut self,
+        mut input_buffer: &'a [u8],
+        is_ending: bool,
+    ) -> Option<Result<JsonToken<'a>, SyntaxError>> {
+        // We remove BOM at the beginning
+        if self.is_start {
+            if input_buffer.len() < 3 && !is_ending {
+                return None;
+            }
+            self.is_start = false;
+            if input_buffer.starts_with(&[0xEF, 0xBB, 0xBF]) {
+                input_buffer = &input_buffer[3..];
+                self.file_offset += 3;
+            }
         }
 
-        let mut state = StringState::Default;
-        loop {
-            match state {
-                StringState::Default => {
-                    let buffer = match self.reader.fill_buf() {
-                        Ok(buf) => {
-                            if buf.is_empty() {
-                                return Err(Error::from(ErrorKind::UnexpectedEof));
-                            } else {
-                                buf
-                            }
-                        }
-                        Err(e) => {
-                            if e.kind() == ErrorKind::Interrupted {
-                                continue;
-                            } else {
-                                return Err(e);
-                            }
-                        }
-                    };
-                    let mut i = 0;
-                    for c in buffer {
-                        i += 1;
-                        match *c {
-                            b'"' => {
-                                self.reader.consume(i);
-                                return self.read_after_value(JsonEvent::String(
-                                    str::from_utf8(output.as_slice())
-                                        .map_err(|e| Error::new(ErrorKind::InvalidData, e))?,
-                                ));
-                            }
-                            b'\\' => {
-                                state = StringState::Escape;
-                                break;
-                            }
-                            0..=0x1F => {
-                                self.reader.consume(i);
-                                return Err(Error::new(
-                                    ErrorKind::InvalidData,
-                                    "Control characters are not allowed in JSON",
-                                ));
-                            }
-                            c => output.push(c),
-                        }
-                    }
-                    self.reader.consume(i);
+        // We skip whitespaces
+        let mut i = 0;
+        while let Some(c) = input_buffer.get(i) {
+            match *c {
+                b' ' | b'\t' => {
+                    i += 1;
                 }
-                StringState::Escape => {
-                    let c = self.lookup_mandatory_front()?;
-                    self.reader.consume(1);
-                    match c {
+                b'\n' => {
+                    i += 1;
+                    self.file_line += 1;
+                    self.file_start_of_last_line = self.file_offset + u64::try_from(i).unwrap();
+                }
+                b'\r' => {
+                    i += 1;
+                    if input_buffer.get(i).map_or_else(
+                        || if is_ending { Some(None) } else { None },
+                        |c| Some(Some(*c)),
+                    )? == Some(b'\n')
+                    {
+                        i += 1; // \r\n
+                    }
+                    self.file_line += 1;
+                    self.file_start_of_last_line = self.file_offset + u64::try_from(i).unwrap();
+                }
+                _ => {
+                    break;
+                }
+            }
+        }
+        self.file_offset += u64::try_from(i).unwrap();
+        input_buffer = &input_buffer[i..];
+
+        if is_ending && input_buffer.is_empty() {
+            return Some(Ok(JsonToken::Eof));
+        }
+
+        // we get the first character
+        match *input_buffer.first()? {
+            b'{' => {
+                self.file_offset += 1;
+                Some(Ok(JsonToken::OpeningCurlyBracket))
+            }
+            b'}' => {
+                self.file_offset += 1;
+                Some(Ok(JsonToken::ClosingCurlyBracket))
+            }
+            b'[' => {
+                self.file_offset += 1;
+                Some(Ok(JsonToken::OpeningSquareBracket))
+            }
+            b']' => {
+                self.file_offset += 1;
+                Some(Ok(JsonToken::ClosingSquareBracket))
+            }
+            b',' => {
+                self.file_offset += 1;
+                Some(Ok(JsonToken::Comma))
+            }
+            b':' => {
+                self.file_offset += 1;
+                Some(Ok(JsonToken::Colon))
+            }
+            b'"' => self.read_string(input_buffer),
+            b't' => self.read_constant(input_buffer, "true", JsonToken::True),
+            b'f' => self.read_constant(input_buffer, "false", JsonToken::False),
+            b'n' => self.read_constant(input_buffer, "null", JsonToken::Null),
+            b'-' | b'0'..=b'9' => self.read_number(input_buffer, is_ending),
+            c => {
+                self.file_offset += 1;
+                Some(Err(self.syntax_error(
+                    self.file_offset - 1..self.file_offset,
+                    if c < 128 {
+                        format!("Unexpected char: '{}'", char::from(c))
+                    } else {
+                        format!("Unexpected byte: \\x{c:X}")
+                    },
+                )))
+            }
+        }
+    }
+
+    fn read_string<'a>(
+        &mut self,
+        input_buffer: &'a [u8],
+    ) -> Option<Result<JsonToken<'a>, SyntaxError>> {
+        let mut error = None;
+        let mut string: Option<(String, usize)> = None;
+        let mut next_byte_offset = 1;
+        loop {
+            match *input_buffer.get(next_byte_offset)? {
+                b'"' => {
+                    // end of string
+                    let result = Some(if let Some(error) = error {
+                        Err(error)
+                    } else if let Some((mut string, read_until)) = string {
+                        if read_until < next_byte_offset {
+                            let (str, e) = self.decode_utf8(
+                                &input_buffer[read_until..next_byte_offset],
+                                self.file_offset + u64::try_from(read_until).unwrap(),
+                            );
+                            error = error.or(e);
+                            string.push_str(&str);
+                        }
+                        if let Some(error) = error {
+                            Err(error)
+                        } else {
+                            Ok(JsonToken::String(Cow::Owned(string)))
+                        }
+                    } else {
+                        let (string, error) = self
+                            .decode_utf8(&input_buffer[1..next_byte_offset], self.file_offset + 1);
+                        if let Some(error) = error {
+                            Err(error)
+                        } else {
+                            Ok(JsonToken::String(string))
+                        }
+                    });
+                    self.file_offset += u64::try_from(next_byte_offset).unwrap() + 1;
+                    return result;
+                }
+                b'\\' => {
+                    // Escape sequences
+                    if string.is_none() {
+                        string = Some((String::new(), 1))
+                    }
+                    let (string, read_until) = string.as_mut().unwrap();
+                    if *read_until < next_byte_offset {
+                        let (str, e) = self.decode_utf8(
+                            &input_buffer[*read_until..next_byte_offset],
+                            self.file_offset + u64::try_from(*read_until).unwrap(),
+                        );
+                        error = error.or(e);
+                        string.push_str(&str);
+                    }
+                    next_byte_offset += 1;
+                    match *input_buffer.get(next_byte_offset)? {
                         b'"' => {
-                            output.push(b'"');
+                            string.push('"');
+                            next_byte_offset += 1;
                         }
                         b'\\' => {
-                            output.push(b'\\');
+                            string.push('\\');
+                            next_byte_offset += 1;
                         }
                         b'/' => {
-                            output.push(b'/');
+                            string.push('/');
+                            next_byte_offset += 1;
                         }
                         b'b' => {
-                            output.push(8);
+                            string.push('\u{8}');
+                            next_byte_offset += 1;
                         }
                         b'f' => {
-                            output.push(12);
+                            string.push('\u{C}');
+                            next_byte_offset += 1;
                         }
                         b'n' => {
-                            output.push(b'\n');
+                            string.push('\n');
+                            next_byte_offset += 1;
                         }
                         b'r' => {
-                            output.push(b'\r');
+                            string.push('\r');
+                            next_byte_offset += 1;
                         }
                         b't' => {
-                            output.push(b'\t');
+                            string.push('\t');
+                            next_byte_offset += 1;
                         }
                         b'u' => {
-                            let mut buf = [0u8; 4];
-                            self.reader.read_exact(&mut buf)?;
-                            let code_point = read_hexa_char(&buf)?;
+                            next_byte_offset += 1;
+                            let val = input_buffer.get(next_byte_offset..next_byte_offset + 4)?;
+                            next_byte_offset += 4;
+                            let code_point = match read_hexa_char(val) {
+                                Ok(cp) => cp,
+                                Err(e) => {
+                                    error = error.or_else(|| {
+                                        let pos = self.file_offset
+                                            + u64::try_from(next_byte_offset).unwrap();
+                                        Some(self.syntax_error(pos - 4..pos, e))
+                                    });
+                                    char::REPLACEMENT_CHARACTER.into()
+                                }
+                            };
                             if let Some(c) = char::from_u32(code_point) {
-                                output.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                                string.push(c);
                             } else {
                                 let high_surrogate = code_point;
-                                let mut buf = [0u8; 6];
-                                self.reader.read_exact(&mut buf)?;
-                                if !buf.starts_with(b"\\u") {
-                                    return Err(Error::new(
-                                            ErrorKind::InvalidData,
+                                if !(0xD800..=0xDBFF).contains(&high_surrogate) {
+                                    error = error.or_else(|| {
+                                        let pos = self.file_offset
+                                            + u64::try_from(next_byte_offset).unwrap();
+                                        Some(self.syntax_error(
+                                            pos - 6..pos,
                                             format!(
-                                                "\\u{:X} is a high surrogate and should be followed by a low surrogate",
+                                                "\\u{:X} is not a valid high surrogate",
                                                 high_surrogate
                                             ),
-                                        ));
+                                        ))
+                                    });
                                 }
-                                let low_surrogate = read_hexa_char(&buf[2..])?;
-                                if !(0xD800..=0xDBFF).contains(&high_surrogate) {
-                                    return Err(Error::new(
-                                        ErrorKind::InvalidData,
-                                        format!(
-                                            "\\u{:X} is not a valid high surrogate",
-                                            high_surrogate
-                                        ),
-                                    ));
+                                let val =
+                                    input_buffer.get(next_byte_offset..next_byte_offset + 6)?;
+                                next_byte_offset += 6;
+                                if !val.starts_with(b"\\u") {
+                                    error = error.or_else(|| {
+                                        let pos = self.file_offset + u64::try_from(next_byte_offset).unwrap();
+                                        Some(self.syntax_error(
+                                            pos - 6..pos,
+                                            format!(
+                                                "\\u{:X} is a high surrogate and should be followed by a low surrogate \\uXXXX",
+                                                high_surrogate
+                                            )
+                                        ))
+                                    });
                                 }
+                                let low_surrogate = match read_hexa_char(&val[2..]) {
+                                    Ok(cp) => cp,
+                                    Err(e) => {
+                                        error = error.or_else(|| {
+                                            let pos = self.file_offset
+                                                + u64::try_from(next_byte_offset).unwrap();
+                                            Some(self.syntax_error(pos - 6..pos, e))
+                                        });
+                                        char::REPLACEMENT_CHARACTER.into()
+                                    }
+                                };
                                 if !(0xDC00..=0xDFFF).contains(&low_surrogate) {
-                                    return Err(Error::new(
-                                        ErrorKind::InvalidData,
-                                        format!(
-                                            "\\u{:X} is not a valid low surrogate",
-                                            low_surrogate
-                                        ),
-                                    ));
+                                    error = error.or_else(|| {
+                                        let pos = self.file_offset
+                                            + u64::try_from(next_byte_offset).unwrap();
+                                        Some(self.syntax_error(
+                                            pos - 6..pos,
+                                            format!(
+                                                "\\u{:X} is not a valid low surrogate",
+                                                low_surrogate
+                                            ),
+                                        ))
+                                    });
                                 }
                                 let code_point = 0x10000
                                     + ((high_surrogate & 0x03FF) << 10)
                                     + (low_surrogate & 0x03FF);
                                 if let Some(c) = char::from_u32(code_point) {
-                                    output.extend_from_slice(c.encode_utf8(&mut buf).as_bytes())
+                                    string.push(c)
                                 } else {
-                                    return Err(Error::new(
-                                        ErrorKind::InvalidData,
-                                        format!(
-                                            "\\u{:X}\\u{:X} is an invalid surrogate pair",
-                                            high_surrogate, low_surrogate
-                                        ),
-                                    ));
+                                    string.push(char::REPLACEMENT_CHARACTER);
+                                    error = error.or_else(|| {
+                                        let pos = self.file_offset
+                                            + u64::try_from(next_byte_offset).unwrap();
+                                        Some(self.syntax_error(
+                                            pos - 12..pos,
+                                            format!(
+                                                "\\u{:X}\\u{:X} is an invalid surrogate pair",
+                                                high_surrogate, low_surrogate
+                                            ),
+                                        ))
+                                    });
                                 }
                             }
                         }
-                        _ => {
-                            return Err(Error::new(
-                                ErrorKind::InvalidData,
-                                "Invalid string escape",
-                            ));
+                        c => {
+                            next_byte_offset += 1;
+                            error = error.or_else(|| {
+                                let pos =
+                                    self.file_offset + u64::try_from(next_byte_offset).unwrap();
+                                Some(self.syntax_error(
+                                    pos - 2..pos,
+                                    format!("'\\{}' is not a valid escape sequence", char::from(c)),
+                                ))
+                            });
+                            string.push(char::REPLACEMENT_CHARACTER);
                         }
                     }
-                    state = StringState::Default;
+                    *read_until = next_byte_offset;
+                }
+                c @ (0..=0x1F) => {
+                    error = error.or_else(|| {
+                        let pos = self.file_offset + u64::try_from(next_byte_offset).unwrap();
+                        Some(self.syntax_error(
+                            pos..pos + 1,
+                            format!("'{}' is not allowed in JSON strings", char::from(c)),
+                        ))
+                    });
+                    next_byte_offset += 1;
+                }
+                _ => {
+                    next_byte_offset += 1;
                 }
             }
         }
     }
 
-    fn parse_constant<'a, const SIZE: usize>(
+    fn read_constant(
         &mut self,
+        input_buffer: &[u8],
         expected: &str,
-        value: JsonEvent<'a>,
-    ) -> Result<JsonEvent<'a>> {
-        debug_assert_eq!(expected.len(), SIZE);
-        let mut buf = [0u8; SIZE];
-        self.reader.read_exact(&mut buf)?;
-        if buf == expected.as_bytes() {
-            self.read_after_value(value)
-        } else {
-            Err(Error::new(
-                ErrorKind::InvalidData,
-                format!(
-                    "{} expected, found {}",
-                    expected,
-                    str::from_utf8(&buf).map_err(|e| Error::new(ErrorKind::InvalidData, e))?
-                ),
-            ))
-        }
+        value: JsonToken<'static>,
+    ) -> Option<Result<JsonToken<'static>, SyntaxError>> {
+        Some(
+            if input_buffer.get(..expected.len())? == expected.as_bytes() {
+                self.file_offset += u64::try_from(expected.len()).unwrap();
+                Ok(value)
+            } else {
+                self.file_offset += u64::try_from(expected.len()).unwrap();
+                Err(self.syntax_error(
+                    self.file_offset - u64::try_from(expected.len()).unwrap()..self.file_offset,
+                    format!("{} expected", expected),
+                ))
+            },
+        )
     }
 
-    fn parse_number<'a>(
+    fn read_number<'a>(
         &mut self,
-        first_byte: u8,
-        output: &'a mut Vec<u8>,
-    ) -> Result<JsonEvent<'a>> {
-        output.clear();
-        if first_byte == b'-' {
-            output.push(b'-');
-            self.reader.consume(1);
+        input_buffer: &'a [u8],
+        is_ending: bool,
+    ) -> Option<Result<JsonToken<'a>, SyntaxError>> {
+        let mut next_byte_offset = 0;
+        if *input_buffer.get(next_byte_offset)? == b'-' {
+            next_byte_offset += 1;
         }
         // integer starting with first bytes
-        // TODO: avoid too many fill_buf
-        let c = self.lookup_mandatory_front()?;
-        match c {
+        match *input_buffer.get(next_byte_offset)? {
             b'0' => {
-                output.push(b'0');
-                self.reader.consume(1);
+                next_byte_offset += 1;
             }
             b'1'..=b'9' => {
-                output.push(c);
-                self.reader.consume(1);
-                self.read_digits(output)?;
+                next_byte_offset += 1;
+                next_byte_offset += read_digits(&input_buffer[next_byte_offset..], is_ending)?;
             }
-            _ => return Err(Error::new(ErrorKind::InvalidData, "Invalid number")),
+            c => {
+                next_byte_offset += 1;
+                self.file_offset += u64::try_from(next_byte_offset).unwrap();
+                return Some(Err(self.syntax_error(
+                    self.file_offset - 1..self.file_offset,
+                    format!("A number is not allowed to start with '{}'", char::from(c)),
+                )));
+            }
         }
 
         // Dot
-        if self.lookup_front()? == Some(b'.') {
-            output.push(b'.');
-            self.reader.consume(1);
-            self.read_char(|c| c.is_ascii_digit(), output)?;
-            self.read_digits(output)?;
+        if input_buffer.get(next_byte_offset).map_or_else(
+            || if is_ending { Some(None) } else { None },
+            |c| Some(Some(*c)),
+        )? == Some(b'.')
+        {
+            next_byte_offset += 1;
+            let c = *input_buffer.get(next_byte_offset)?;
+            next_byte_offset += 1;
+            if !c.is_ascii_digit() {
+                self.file_offset += u64::try_from(next_byte_offset).unwrap();
+                return Some(Err(self.syntax_error(
+                    self.file_offset - 1..self.file_offset,
+                    format!(
+                        "A number fractional part must start with a digit and not '{}'",
+                        char::from(c)
+                    ),
+                )));
+            }
+            next_byte_offset += read_digits(&input_buffer[next_byte_offset..], is_ending)?;
         }
 
         // Exp
-        if let Some(c) = self.lookup_front()? {
-            if c == b'e' || c == b'E' {
-                output.push(c);
-                self.reader.consume(1);
-                let c = self.lookup_mandatory_front()?;
-                match c {
-                    b'-' | b'+' => {
-                        output.push(c);
-                        self.reader.consume(1);
-                        self.read_char(|c| c.is_ascii_digit(), output)?;
-                    }
-                    b'0'..=b'9' => {
-                        output.push(c);
-                        self.reader.consume(1);
-                    }
-                    _ => {
-                        return Err(Error::new(
-                            ErrorKind::InvalidData,
-                            format!("Invalid number. Found char {}", char::from(c)),
-                        ))
+        let c = input_buffer.get(next_byte_offset).map_or_else(
+            || if is_ending { Some(None) } else { None },
+            |c| Some(Some(*c)),
+        )?;
+        if c == Some(b'e') || c == Some(b'E') {
+            next_byte_offset += 1;
+            match *input_buffer.get(next_byte_offset)? {
+                b'-' | b'+' => {
+                    next_byte_offset += 1;
+                    let c = *input_buffer.get(next_byte_offset)?;
+                    next_byte_offset += 1;
+                    if !c.is_ascii_digit() {
+                        self.file_offset += u64::try_from(next_byte_offset).unwrap();
+                        return Some(Err(self.syntax_error(
+                            self.file_offset - 1..self.file_offset,
+                            format!(
+                                "A number exponential part must contain at least a digit, '{}' found",
+                                char::from(c)
+                            ),
+                        )));
                     }
                 }
-                self.read_digits(output)?;
-            }
-        }
-
-        self.read_after_value(JsonEvent::Number(
-            str::from_utf8(output.as_slice()).map_err(|e| Error::new(ErrorKind::InvalidData, e))?,
-        ))
-    }
-
-    fn read_char(&mut self, valid: impl Fn(u8) -> bool, output: &mut Vec<u8>) -> Result<()> {
-        let c = self.lookup_mandatory_front()?;
-        if valid(c) {
-            output.push(c);
-            self.reader.consume(1);
-            Ok(())
-        } else {
-            Err(Error::new(
-                ErrorKind::InvalidData,
-                format!("Invalid number. Found char {}", char::from(c)),
-            ))
-        }
-    }
-
-    fn read_digits(&mut self, output: &mut Vec<u8>) -> Result<()> {
-        while let Some(c) = self.lookup_front()? {
-            if c.is_ascii_digit() {
-                output.push(c);
-                self.reader.consume(1);
-            } else {
-                break;
-            }
-        }
-        Ok(())
-    }
-
-    fn read_after_value<'a>(&mut self, value: JsonEvent<'a>) -> Result<JsonEvent<'a>> {
-        match self.state_stack.pop() {
-            Some(JsonState::FirstObjectKey) | Some(JsonState::NextObjectKey) => {
-                if self.lookup_front_skipping_whitespaces()? == Some(b':') {
-                    self.reader.consume(1);
-                    self.state_stack.push(JsonState::ObjectValue);
-                    if let JsonEvent::String(value) = value {
-                        Ok(JsonEvent::ObjectKey(value))
-                    } else {
-                        Err(Error::new(
-                            ErrorKind::InvalidData,
-                            "Object keys should strings",
-                        ))
-                    }
-                } else {
-                    Err(Error::new(
-                        ErrorKind::InvalidData,
-                        "Object keys should be followed by ':'",
-                    ))
+                b'0'..=b'9' => {
+                    next_byte_offset += 1;
+                }
+                c => {
+                    next_byte_offset += 1;
+                    self.file_offset += u64::try_from(next_byte_offset).unwrap();
+                    return Some(Err(self.syntax_error(
+                        self.file_offset - 1..self.file_offset,
+                        format!(
+                            "A number exponential part must start with +, - or a digit, '{}' found",
+                            char::from(c)
+                        ),
+                    )));
                 }
             }
-            Some(JsonState::ObjectValue) => match self.lookup_front_skipping_whitespaces()? {
-                Some(b',') => {
-                    self.reader.consume(1);
-                    self.state_stack.push(JsonState::NextObjectKey);
-                    Ok(value)
-                }
-                Some(b'}') => {
-                    self.state_stack.push(JsonState::LastObjectKey);
-                    Ok(value)
-                }
-                _ => Err(Error::new(
-                    ErrorKind::InvalidData,
-                    "Object values should be followed by a comma or the object end",
-                )),
+            next_byte_offset += read_digits(&input_buffer[next_byte_offset..], is_ending)?;
+        }
+        self.file_offset += u64::try_from(next_byte_offset).unwrap();
+        Some(Ok(JsonToken::Number(Cow::Borrowed(
+            str::from_utf8(&input_buffer[..next_byte_offset]).unwrap(),
+        ))))
+    }
+
+    fn decode_utf8<'a>(
+        &self,
+        input_buffer: &'a [u8],
+        start_position: u64,
+    ) -> (Cow<'a, str>, Option<SyntaxError>) {
+        match str::from_utf8(input_buffer) {
+            Ok(str) => (Cow::Borrowed(str), None),
+            Err(e) => (
+                String::from_utf8_lossy(input_buffer),
+                Some({
+                    let pos = start_position + u64::try_from(e.valid_up_to()).unwrap();
+                    self.syntax_error(pos..pos + 1, format!("Invalid UTF-8: {e}"))
+                }),
+            ),
+        }
+    }
+
+    fn syntax_error(&self, file_offset: Range<u64>, message: impl Into<String>) -> SyntaxError {
+        let start_file_offset = max(file_offset.start, self.file_start_of_last_line);
+        SyntaxError {
+            location: TextPosition {
+                line: self.file_line,
+                column: start_file_offset - self.file_start_of_last_line, //TODO: unicode
+                offset: start_file_offset,
+            }..TextPosition {
+                line: self.file_line,
+                column: file_offset.end - self.file_start_of_last_line, //TODO: unicode
+                offset: file_offset.end,
             },
-            Some(JsonState::FirstArray) | Some(JsonState::NextArray) => {
-                match self.lookup_front_skipping_whitespaces()? {
-                    Some(b',') => {
-                        self.reader.consume(1);
-                        self.state_stack.push(JsonState::NextArray);
-                        Ok(value)
-                    }
-                    Some(b']') => {
-                        self.state_stack.push(JsonState::LastArray);
-                        Ok(value)
-                    }
-                    _ => Err(Error::new(
-                        ErrorKind::InvalidData,
-                        "Array values should be followed by a comma or the array end",
-                    )),
-                }
-            }
-            None => {
-                if self.element_read {
-                    Err(Error::new(ErrorKind::InvalidData, "JSON trailing content"))
-                } else {
-                    self.element_read = true;
-                    Ok(value)
-                }
-            }
-            Some(JsonState::LastObjectKey) => Err(Error::new(
-                ErrorKind::InvalidData,
-                "JSON object elements should be separated by commas",
-            )),
-            Some(JsonState::LastArray) => Err(Error::new(
-                ErrorKind::InvalidData,
-                "JSON array elements should be separated by commas",
-            )),
-        }
-    }
-
-    fn lookup_front_skipping_whitespaces(&mut self) -> Result<Option<u8>> {
-        loop {
-            match self.reader.fill_buf() {
-                Ok(buf) => {
-                    if buf.is_empty() {
-                        return Ok(None);
-                    }
-                    let skipped = skip_whitespaces(buf);
-                    if skipped == buf.len() {
-                        self.reader.consume(skipped);
-                    } else {
-                        let result = Some(buf[skipped]);
-                        self.reader.consume(skipped);
-                        return Ok(result);
-                    }
-                }
-                Err(error) => {
-                    if error.kind() != ErrorKind::Interrupted {
-                        return Err(error);
-                    }
-                }
-            }
-        }
-    }
-
-    fn lookup_mandatory_front(&mut self) -> Result<u8> {
-        if let Some(v) = self.lookup_front()? {
-            Ok(v)
-        } else {
-            Err(Error::from(ErrorKind::UnexpectedEof))
-        }
-    }
-
-    fn lookup_front(&mut self) -> Result<Option<u8>> {
-        loop {
-            match self.reader.fill_buf() {
-                Ok(buf) => return Ok(if buf.is_empty() { None } else { Some(buf[0]) }),
-                Err(error) => {
-                    if error.kind() != ErrorKind::Interrupted {
-                        return Err(error);
-                    }
-                }
-            }
-        }
-    }
-
-    fn check_stack_size(&self) -> Result<()> {
-        if let Some(max_stack_size) = self.max_stack_size {
-            if self.state_stack.len() > max_stack_size {
-                Err(Error::new(
-                    ErrorKind::InvalidData,
-                    format!(
-                        "Max stack size of {} reached on an object opening",
-                        max_stack_size
-                    ),
-                ))
-            } else {
-                Ok(())
-            }
-        } else {
-            Ok(())
+            message: message.into(),
         }
     }
 }
 
-#[derive(Eq, PartialEq, Copy, Clone)]
-enum JsonState {
-    FirstArray,
-    NextArray,
-    LastArray,
-    FirstObjectKey,
-    NextObjectKey,
-    LastObjectKey,
-    ObjectValue,
-}
-
-fn skip_whitespaces(buf: &[u8]) -> usize {
-    for (i, c) in buf.iter().enumerate() {
-        if !matches!(c, b' ' | b'\t' | b'\n' | b'\r') {
-            return i;
-        }
-    }
-    buf.len()
-}
-
-fn read_hexa_char(input: &[u8]) -> Result<u32> {
+fn read_hexa_char(input: &[u8]) -> Result<u32, String> {
     let mut value = 0;
     for c in input.iter().copied() {
         value = value * 16
@@ -570,12 +1013,201 @@ fn read_hexa_char(input: &[u8]) -> Result<u32> {
                 b'a'..=b'f' => u32::from(c) - u32::from(b'a') + 10,
                 b'A'..=b'F' => u32::from(c) - u32::from(b'A') + 10,
                 _ => {
-                    return Err(Error::new(
-                        ErrorKind::InvalidData,
-                        "Unexpected character in a unicode escape",
+                    return Err(format!(
+                        "Unexpected character in a unicode escape: '{}'",
+                        char::from(c)
                     ))
                 }
             }
     }
     Ok(value)
+}
+
+fn read_digits(input_buffer: &[u8], is_ending: bool) -> Option<usize> {
+    let count = input_buffer
+        .iter()
+        .take_while(|c| c.is_ascii_digit())
+        .count();
+    if count == input_buffer.len() && !is_ending {
+        return None;
+    }
+    Some(count)
+}
+
+/// Result of [`LowLevelJsonReader::read_next_event`].
+#[derive(Debug)]
+pub struct LowLevelJsonReaderResult<'a> {
+    /// How many bytes have been read from `input_buffer` and should be removed from it.
+    pub consumed_bytes: usize,
+    /// A possible new event
+    pub event: Option<Result<JsonEvent<'a>, SyntaxError>>,
+}
+
+/// A position in a text i.e. a `line` number starting from 0, a `column` number starting from 0 (in number of code points) and a global file `offset` starting from 0 (in number of bytes).
+#[derive(Eq, PartialEq, Debug, Clone, Copy)]
+pub struct TextPosition {
+    pub line: u64,
+    pub column: u64,
+    pub offset: u64,
+}
+
+/// An error in the syntax of the parsed file.
+///
+/// It is composed of a message and a byte range in the input.
+#[derive(Debug)]
+pub struct SyntaxError {
+    location: Range<TextPosition>,
+    message: String,
+}
+
+impl SyntaxError {
+    /// The location of the error inside of the file.
+    #[inline]
+    pub fn location(&self) -> Range<TextPosition> {
+        self.location.clone()
+    }
+
+    /// The error message.
+    #[inline]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for SyntaxError {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.location.start.offset + 1 >= self.location.end.offset {
+            write!(
+                f,
+                "Parser error at line {} column {}: {}",
+                self.location.start.line + 1,
+                self.location.start.column + 1,
+                self.message
+            )
+        } else if self.location.start.line == self.location.end.line {
+            write!(
+                f,
+                "Parser error between at line {} between columns {} and column {}: {}",
+                self.location.start.line + 1,
+                self.location.start.column + 1,
+                self.location.end.column + 1,
+                self.message
+            )
+        } else {
+            write!(
+                f,
+                "Parser error between line {} column {} and line {} column {}: {}",
+                self.location.start.line + 1,
+                self.location.start.column + 1,
+                self.location.end.line + 1,
+                self.location.end.column + 1,
+                self.message
+            )
+        }
+    }
+}
+
+impl Error for SyntaxError {}
+
+impl From<SyntaxError> for io::Error {
+    #[inline]
+    fn from(error: SyntaxError) -> Self {
+        io::Error::new(io::ErrorKind::InvalidData, error)
+    }
+}
+
+/// A parsing error.
+///
+/// It is the union of [`SyntaxError`] and [`std::io::Error`].
+#[derive(Debug)]
+pub enum ParseError {
+    /// I/O error during parsing (file not found...).
+    Io(io::Error),
+    /// An error in the file syntax.
+    Syntax(SyntaxError),
+}
+
+impl fmt::Display for ParseError {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(e) => e.fmt(f),
+            Self::Syntax(e) => e.fmt(f),
+        }
+    }
+}
+
+impl Error for ParseError {
+    #[inline]
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(match self {
+            Self::Io(e) => e,
+            Self::Syntax(e) => e,
+        })
+    }
+}
+
+impl From<SyntaxError> for ParseError {
+    #[inline]
+    fn from(error: SyntaxError) -> Self {
+        Self::Syntax(error)
+    }
+}
+
+impl From<io::Error> for ParseError {
+    #[inline]
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<ParseError> for io::Error {
+    #[inline]
+    fn from(error: ParseError) -> Self {
+        match error {
+            ParseError::Syntax(e) => e.into(),
+            ParseError::Io(e) => e,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_messages() {
+        let entries = [
+            (
+                b"".as_slice(),
+                "Parser error at line 1 column 1: Unexpected end of file, a value was expected",
+            ),
+            (
+                b"\n}",
+                "Parser error at line 2 column 1: Unexpected closing curly bracket, no array to close",
+            ),
+            (
+                b"\r\n}",
+                "Parser error at line 2 column 1: Unexpected closing curly bracket, no array to close",
+            ),
+            (
+                b"\"\n\"",
+                "Parser error at line 1 column 2: '\n' is not allowed in JSON strings",
+            ),
+            (
+                b"\"\\uDCFF\\u0000\"",
+                "Parser error between at line 1 between columns 2 and column 8: \\uDCFF is not a valid high surrogate",
+            )
+        ];
+        for (json, error) in entries {
+            assert_eq!(
+                FromBufferJsonReader::new(json)
+                    .read_next_event()
+                    .unwrap_err()
+                    .to_string(),
+                error
+            );
+        }
+    }
 }

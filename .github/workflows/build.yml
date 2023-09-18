@@ -1,6 +1,7 @@
 name: build
 
-on: [ push, pull_request ]
+on:
+  - pull_request
 
 jobs:
   fmt:
@@ -14,15 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: rustup update && rustup component add clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-targets
-
-  clippy_msrv:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: rustup update && rustup override set 1.64.0 && rustup component add clippy
+      - run: rustup update && rustup default 1.72.0 && rustup component add clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets -- -D warnings -D clippy::all
 
@@ -34,26 +27,26 @@ jobs:
           submodules: true
       - run: rustup update
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --all-features
-      - run: cargo test --verbose
-        env:
-          RUST_BACKTRACE: 1
+      - run: cargo test
+
+  test_msv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - run: rustup update && rustup toolchain install nightly && rustup default 1.70.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo +nightly update -Z direct-minimal-versions
+      - run: cargo test
 
   rustdoc:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: rustup update
+      - run: rustup update && rustup override set 1.72.0
       - uses: Swatinem/rust-cache@v2
-      - run: cargo doc --no-deps
-
-  rustdoc_msrv:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: rustup update && rustup override set 1.64.0
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo doc --no-deps
+      - run: cargo doc --all-features --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
 
@@ -70,8 +63,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: true
       - run: rustup update
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-semver-checks || true

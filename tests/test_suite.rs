@@ -1,6 +1,6 @@
-use json_event_parser::{JsonEvent, JsonReader, JsonWriter};
+use json_event_parser::{FromBufferJsonReader, FromReadJsonReader, JsonEvent, JsonWriter};
 use std::fs::{read_dir, File};
-use std::io::{BufReader, Read, Result};
+use std::io::{Read, Result};
 use std::{fs, str};
 
 const OTHER_VALID_TESTS: [&str; 12] = [
@@ -55,29 +55,35 @@ fn test_testsuite_parsing() -> Result<()> {
         if !file_name.ends_with(".json") {
             continue;
         }
-        let result = parse_result(File::open(file.path())?);
+        let result = parse_read_result(File::open(file.path())?);
         if file_name.starts_with("y_") || OTHER_VALID_TESTS.contains(&file_name.as_ref()) {
             match result {
-                Ok(serialization) => match parse_result(serialization.as_slice()) {
-                    Ok(other_serialization) => assert_eq!(serialization, other_serialization),
-                    Err(error) => panic!(
-                        "Parsing of {} failed with error {}",
-                        str::from_utf8(&serialization).unwrap(),
-                        error
-                    ),
-                },
+                Ok(serialization) => {
+                    let serialization_str = str::from_utf8(&serialization).unwrap();
+                    match parse_buffer_result(&serialization) {
+                        Ok(other_serialization) => {
+                            let other_serialization_str =
+                                str::from_utf8(&other_serialization).unwrap();
+                            assert_eq!(
+                                serialization_str,
+                                other_serialization_str,
+                                "Roundtrip {other_serialization_str} serialization of {serialization_str} is not identical (test {file_name})", 
+                            )
+                        }
+                        Err(error) => {
+                            panic!("Parsing of {serialization_str} failed with error {error}")
+                        }
+                    }
+                }
                 Err(error) => panic!(
-                    "Parsing of {} failed with error {} on {:x?}",
-                    file_name,
-                    error,
-                    fs::read(file.path())?
+                    "Parsing of {file_name} failed with error {error} on {}",
+                    fs::read_to_string(file.path())?
                 ),
             }
         } else if file_name.starts_with("n_") || OTHER_INVALID_TESTS.contains(&file_name.as_ref()) {
             if let Ok(json) = result {
                 panic!(
-                    "Parsing of {} wrongly succeeded with json {}",
-                    file_name,
+                    "Parsing of {file_name} wrongly succeeded with json {}",
                     str::from_utf8(&json).unwrap()
                 )
             }
@@ -86,16 +92,26 @@ fn test_testsuite_parsing() -> Result<()> {
     Ok(())
 }
 
-fn parse_result(read: impl Read) -> Result<Vec<u8>> {
-    let mut buffer = Vec::new();
+fn parse_buffer_result(read: &[u8]) -> Result<Vec<u8>> {
     let mut output_buffer = Vec::new();
-    let mut reader = JsonReader::from_reader(BufReader::new(read));
+    let mut reader = FromBufferJsonReader::new(read);
     let mut writer = JsonWriter::from_writer(&mut output_buffer);
     loop {
-        match reader.read_event(&mut buffer) {
-            Ok(JsonEvent::Eof) => return Ok(output_buffer),
-            Ok(e) => writer.write_event(e)?,
-            Err(e) => return Err(e),
+        match reader.read_next_event()? {
+            JsonEvent::Eof => return Ok(output_buffer),
+            e => writer.write_event(e)?,
+        }
+    }
+}
+
+fn parse_read_result(read: impl Read) -> Result<Vec<u8>> {
+    let mut output_buffer = Vec::new();
+    let mut reader = FromReadJsonReader::new(read);
+    let mut writer = JsonWriter::from_writer(&mut output_buffer);
+    loop {
+        match reader.read_next_event()? {
+            JsonEvent::Eof => return Ok(output_buffer),
+            e => writer.write_event(e)?,
         }
     }
 }
