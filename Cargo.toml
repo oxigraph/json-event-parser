@@ -1,6 +1,6 @@
 [package]
 name = "json-event-parser"
-version = "0.1.1"
+version = "0.2.0-alpha.1-dev"
 authors = ["Tpt <thomas@pellissier-tanon.fr>"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
@@ -12,13 +12,24 @@ description = """
 A JSON event parser and serializer
 """
 edition = "2021"
-rust-version = "1.64"
+rust-version = "1.70"
 exclude = ["JSONTestSuite"]
+
+[features]
+async-tokio = ["dep:tokio"]
+
+[dependencies]
+tokio = { version = "1.29", optional = true, features = ["io-util"] }
 
 [dev-dependencies]
 criterion = "0.5"
+tokio = { version = "1.29", features = ["rt", "macros"] }
 serde_json = "1"
 
 [[bench]]
 name = "test_suite"
 harness = false
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

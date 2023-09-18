@@ -1,68 +1,51 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use json_event_parser::{JsonEvent, JsonReader};
-use std::fs::{read_dir, File};
-use std::io::{Cursor, Read};
+use json_event_parser::{FromReadJsonReader, JsonEvent};
+use std::fs::{self, read_dir};
 
 fn bench_json_parse(c: &mut Criterion) {
-    let examples = load_testsuite_examples();
+    let example = load_testsuite_example();
 
     c.bench_function("JSON test suite", |b| {
         b.iter(|| {
-            let mut buffer = Vec::new();
-            for json in examples.iter() {
-                let mut reader = JsonReader::from_reader(Cursor::new(json));
-                while reader.read_event(&mut buffer).unwrap() != JsonEvent::Eof {
-                    //read more
-                }
+            let mut reader = FromReadJsonReader::new(example.as_slice());
+            while reader.read_next_event().unwrap() != JsonEvent::Eof {
+                //read more
             }
         })
     });
 }
 
 fn bench_serde_json_parse(c: &mut Criterion) {
-    let examples = load_testsuite_examples();
+    let example = load_testsuite_example();
 
     c.bench_function("Serde JSON test suite", |b| {
         b.iter(|| {
-            for json in examples.iter() {
-                let _: serde_json::Value = serde_json::from_reader(Cursor::new(json)).unwrap();
-            }
+            let _: serde_json::Value = serde_json::from_reader(example.as_slice()).unwrap();
         })
     });
 }
 
-fn load_testsuite_examples() -> Vec<Vec<u8>> {
-    let blacklist = vec![
-        "y_string_accepted_surrogate_pair.json",
-        "y_string_accepted_surrogate_pairs.json",
-        "y_string_last_surrogates_1_and_2.json",
-        "y_string_unicode_U+1FFFE_nonchar.json",
-        "y_string_unicode_U+10FFFE_nonchar.json",
-        "y_string_surrogates_U+1D11E_MUSICAL_SYMBOL_G_CLEF.json",
-    ];
-    read_dir(format!(
+fn load_testsuite_example() -> Vec<u8> {
+    let mut result = Vec::new();
+    result.extend_from_slice(b"[\n");
+    for file in read_dir(format!(
         "{}/JSONTestSuite/test_parsing",
         env!("CARGO_MANIFEST_DIR")
     ))
     .unwrap()
-    .filter_map(|file| {
+    {
         let file = file.unwrap();
         let file_name = file.file_name().to_str().unwrap().to_owned();
-        if file_name.starts_with("y_")
-            && file_name.ends_with(".json")
-            && !blacklist.contains(&file_name.as_str())
-        {
-            let mut buf = Vec::new();
-            File::open(file.path())
-                .unwrap()
-                .read_to_end(&mut buf)
-                .unwrap();
-            Some(buf)
-        } else {
-            None
+        if file_name.starts_with("y_") && file_name.ends_with(".json") {
+            if result.len() > 2 {
+                result.extend_from_slice(b",\n");
+            }
+            result.push(b'\t');
+            result.extend_from_slice(&fs::read(file.path()).unwrap());
         }
-    })
-    .collect()
+    }
+    result.extend_from_slice(b"\n]");
+    result
 }
 
 criterion_group!(parser, bench_json_parse, bench_serde_json_parse);

@@ -1,16 +1,16 @@
 use crate::JsonEvent;
 use std::io::{Error, ErrorKind, Result, Write};
 
-/// A simple JSON streaming writer.
+/// A JSON streaming writer.
 ///
-/// ```rust
+/// ```
 /// use json_event_parser::{JsonWriter, JsonEvent};
 ///
 /// let mut buffer = Vec::new();
 /// let mut writer = JsonWriter::from_writer(&mut buffer);
 /// writer.write_event(JsonEvent::StartObject)?;
-/// writer.write_event(JsonEvent::ObjectKey("foo"))?;
-/// writer.write_event(JsonEvent::Number("1"))?;
+/// writer.write_event(JsonEvent::ObjectKey("foo".into()))?;
+/// writer.write_event(JsonEvent::Number("1".into()))?;
 /// writer.write_event(JsonEvent::EndObject)?;
 ///
 /// assert_eq!(buffer.as_slice(), b"{\"foo\":1}");
@@ -44,7 +44,7 @@ impl<W: Write> JsonWriter<W> {
         match event {
             JsonEvent::String(s) => {
                 self.before_value()?;
-                write_escaped_json_string(s, &mut self.writer)
+                write_escaped_json_string(&s, &mut self.writer)
             }
             JsonEvent::Number(number) => {
                 self.before_value()?;
@@ -113,7 +113,7 @@ impl<W: Write> JsonWriter<W> {
                 }
                 self.state_stack.push(JsonState::ContinuationObject);
                 self.state_stack.push(JsonState::ObjectValue);
-                write_escaped_json_string(key, &mut self.writer)?;
+                write_escaped_json_string(&key, &mut self.writer)?;
                 self.writer.write_all(b":")
             }
             JsonEvent::Eof => Err(Error::new(
@@ -185,7 +185,7 @@ fn write_escaped_json_string(s: &str, sink: &mut impl Write) -> Result<()> {
                             let mut c = c as u8;
                             for i in (2..6).rev() {
                                 let ch = c % 16;
-                                buffer[i] = ch + if ch < 10 { b'0' } else { b'A' };
+                                buffer[i] = if ch < 10 { b'0' + ch } else { b'A' + ch - 10 };
                                 c /= 16;
                             }
                             sink.write_all(&buffer)
