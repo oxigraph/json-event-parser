@@ -1,7 +1,7 @@
 #![no_main]
 
 use json_event_parser::{
-    JsonEvent, JsonWriter, LowLevelJsonReader, LowLevelJsonReaderResult, SyntaxError,
+    JsonEvent, LowLevelJsonReader, LowLevelJsonReaderResult, SyntaxError, ToWriteJsonWriter,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -10,7 +10,7 @@ fn parse_chunks(chunks: &[&[u8]]) -> (String, Option<SyntaxError>) {
     let mut input_cursor = 0;
     let mut output_buffer = Vec::new();
     let mut reader = LowLevelJsonReader::new();
-    let mut writer = JsonWriter::from_writer(&mut output_buffer);
+    let mut writer = ToWriteJsonWriter::new(&mut output_buffer);
     for (i, chunk) in chunks.iter().enumerate() {
         input_buffer.extend_from_slice(chunk);
         loop {
@@ -21,7 +21,8 @@ fn parse_chunks(chunks: &[&[u8]]) -> (String, Option<SyntaxError>) {
             input_cursor += consumed_bytes;
             match event {
                 Some(Ok(JsonEvent::Eof)) => {
-                    return (String::from_utf8(output_buffer).unwrap(), None)
+                    writer.finish().unwrap();
+                    return (String::from_utf8(output_buffer).unwrap(), None);
                 }
                 Some(Ok(event)) => writer.write_event(event).unwrap(),
                 Some(Err(e)) => return (String::from_utf8(output_buffer).unwrap(), Some(e)),
