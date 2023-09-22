@@ -19,7 +19,9 @@ pub use crate::read::{
     FromBufferJsonReader, FromReadJsonReader, LowLevelJsonReader, LowLevelJsonReaderResult,
     ParseError, SyntaxError, TextPosition,
 };
-pub use crate::write::JsonWriter;
+#[cfg(feature = "async-tokio")]
+pub use crate::write::ToTokioAsyncWriteJsonWriter;
+pub use crate::write::{LowLevelJsonWriter, ToWriteJsonWriter};
 use std::borrow::Cow;
 
 /// Possible events during JSON parsing.

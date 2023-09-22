@@ -29,16 +29,15 @@ assert_eq!(reader.read_next_event()?, JsonEvent::Eof);
 Writer example:
 
 ```rust
-use json_event_parser::{JsonWriter, JsonEvent};
+use json_event_parser::{ToWriteJsonWriter, JsonEvent};
 
-let mut buffer = Vec::new();
-let mut writer = JsonWriter::from_writer(&mut buffer);
+let mut writer = ToWriteJsonWriter::new(Vec::new());
 writer.write_event(JsonEvent::StartObject)?;
 writer.write_event(JsonEvent::ObjectKey("foo".into()))?;
 writer.write_event(JsonEvent::Number("1".into()))?;
 writer.write_event(JsonEvent::EndObject)?;
 
-assert_eq!(buffer.as_slice(), b"{\"foo\":1}");
+assert_eq!(writer.finish()?.as_slice(), b"{\"foo\":1}");
 # std::io::Result::Ok(())
 ```
 

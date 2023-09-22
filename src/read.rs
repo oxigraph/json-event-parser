@@ -37,9 +37,9 @@ pub struct FromReadJsonReader<R: Read> {
 }
 
 impl<R: Read> FromReadJsonReader<R> {
-    pub fn new(read: R) -> Self {
+    pub const fn new(read: R) -> Self {
         Self {
-            input_buffer: Vec::with_capacity(MIN_BUFFER_SIZE),
+            input_buffer: Vec::new(),
             input_buffer_start: 0,
             input_buffer_end: 0,
             max_buffer_size: MAX_BUFFER_SIZE,
@@ -140,9 +140,9 @@ pub struct FromTokioAsyncReadJsonReader<R: AsyncRead + Unpin> {
 
 #[cfg(feature = "async-tokio")]
 impl<R: AsyncRead + Unpin> FromTokioAsyncReadJsonReader<R> {
-    pub fn new(read: R) -> Self {
+    pub const fn new(read: R) -> Self {
         Self {
-            input_buffer: Vec::with_capacity(MIN_BUFFER_SIZE),
+            input_buffer: Vec::new(),
             input_buffer_start: 0,
             input_buffer_end: 0,
             max_buffer_size: MAX_BUFFER_SIZE,
@@ -234,7 +234,7 @@ pub struct FromBufferJsonReader<'a> {
 }
 
 impl<'a> FromBufferJsonReader<'a> {
-    pub fn new(buffer: &'a [u8]) -> Self {
+    pub const fn new(buffer: &'a [u8]) -> Self {
         Self {
             input_buffer: buffer,
             parser: LowLevelJsonReader::new(),
