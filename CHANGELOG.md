@@ -1,3 +1,17 @@
+## [0.2.0-alpha.1] - 2023-09-23
+
+### Added
+- Support of UTF-8 byte-order-mark (BOM) during parsing.
+- Support of Tokio `AsyncRead` and `AsyncWrite` interfaces behind the `async-tokio` feature.
+
+## Changed
+- The parser API has been rewritten. The new entry points are `FromBufferJsonReader`, `FromReadJsonReader`, and `LowLevelJsonReader`.
+- The serializer API has been rewritten. The new entry points are `ToWriteJsonWriter` and `LowLevelJsonWriter`.
+- The parser now returns `ParseError` and `SyntaxError` types instead of `std::io::Error`.
+- Escaped unicode surrogate pairs are now carefully validated.
+- Minimal supported Rust version has been bumped to 1.70.
+
+
 ## [0.1.1] - 2021-07-27
 
 ### Added
