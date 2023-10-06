@@ -11,6 +11,7 @@ fn parse_chunks(chunks: &[&[u8]]) -> (String, Option<SyntaxError>) {
     let mut output_buffer = Vec::new();
     let mut reader = LowLevelJsonReader::new();
     let mut writer = ToWriteJsonWriter::new(&mut output_buffer);
+    let mut error = None;
     for (i, chunk) in chunks.iter().enumerate() {
         input_buffer.extend_from_slice(chunk);
         loop {
@@ -21,11 +22,23 @@ fn parse_chunks(chunks: &[&[u8]]) -> (String, Option<SyntaxError>) {
             input_cursor += consumed_bytes;
             match event {
                 Some(Ok(JsonEvent::Eof)) => {
-                    writer.finish().unwrap();
-                    return (String::from_utf8(output_buffer).unwrap(), None);
+                    if error.is_none() {
+                        writer.finish().unwrap();
+                    }
+                    return (String::from_utf8(output_buffer).unwrap(), error);
                 }
-                Some(Ok(event)) => writer.write_event(event).unwrap(),
-                Some(Err(e)) => return (String::from_utf8(output_buffer).unwrap(), Some(e)),
+                Some(Ok(event)) => {
+                    if error.is_none() {
+                        writer.write_event(event).unwrap();
+                    } else {
+                        let _ = writer.write_event(event); // We don't know if we write ok structure
+                    }
+                }
+                Some(Err(e)) => {
+                    if error.is_none() {
+                        error = Some(e)
+                    }
+                }
                 None => break,
             }
         }
@@ -48,8 +61,12 @@ fuzz_target!(|data: &[u8]| {
     let (without_separators, without_separators_error) =
         parse_chunks(&[&merge(data.split(|c| *c == 0xFF))]);
     assert_eq!(
-        with_separators_error.is_none(),
-        without_separators_error.is_none(),
+        with_separators_error
+            .as_ref()
+            .map_or_else(String::new, |e| e.to_string()),
+        without_separators_error
+            .as_ref()
+            .map_or_else(String::new, |e| e.to_string()),
         "{with_separators_error:?} vs {without_separators_error:?}"
     );
     assert_eq!(with_separators, without_separators);
