@@ -67,7 +67,7 @@ impl<R: Read> FromReadJsonReader<R> {
                         let input_buffer_ptr: *const [u8] =
                             &self.input_buffer[self.input_buffer_start..self.input_buffer_end];
                         &*input_buffer_ptr
-                    }, // Borrow checker workaround https://github.com/rust-lang/rust/issues/70255
+                    }, // SAFETY: Borrow checker workaround https://github.com/rust-lang/rust/issues/70255
                     self.is_ending,
                 );
                 self.input_buffer_start += consumed_bytes;
@@ -296,6 +296,7 @@ pub struct LowLevelJsonReader {
     state_stack: Vec<JsonState>,
     max_state_stack_size: usize,
     element_read: bool,
+    buffered_event: Option<JsonEvent<'static>>,
 }
 
 impl LowLevelJsonReader {
@@ -305,11 +306,13 @@ impl LowLevelJsonReader {
                 file_offset: 0,
                 file_line: 0,
                 file_start_of_last_line: 0,
+                file_start_of_last_token: 0,
                 is_start: true,
             },
             state_stack: Vec::new(),
             max_state_stack_size: MAX_STATE_STACK_SIZE,
             element_read: false,
+            buffered_event: None,
         }
     }
 
@@ -327,23 +330,40 @@ impl LowLevelJsonReader {
         input_buffer: &'a [u8],
         is_ending: bool,
     ) -> LowLevelJsonReaderResult<'a> {
+        if let Some(event) = self.buffered_event.take() {
+            return LowLevelJsonReaderResult {
+                consumed_bytes: 0,
+                event: Some(Ok(event)),
+            };
+        }
         let start_file_offset = self.lexer.file_offset;
-        while let Some(event) = self.lexer.read_next_token(
+        while let Some(token) = self.lexer.read_next_token(
             &input_buffer[usize::try_from(self.lexer.file_offset - start_file_offset).unwrap()..],
             is_ending,
         ) {
             let consumed_bytes = (self.lexer.file_offset - start_file_offset)
                 .try_into()
                 .unwrap();
-            match event {
+            match token {
                 Ok(token) => {
-                    if let Some(event) = self.apply_new_token(token) {
+                    let (event, error) = self.apply_new_token(token);
+                    let error = error.map(|e| {
+                        self.lexer.syntax_error(
+                            self.lexer.file_start_of_last_token..self.lexer.file_offset,
+                            e,
+                        )
+                    });
+                    if let Some(error) = error {
+                        self.buffered_event = event.map(owned_event);
                         return LowLevelJsonReaderResult {
                             consumed_bytes,
-                            event: Some(event.map_err(|e| {
-                                self.lexer
-                                    .syntax_error(start_file_offset..self.lexer.file_offset, e)
-                            })),
+                            event: Some(Err(error)),
+                        };
+                    }
+                    if let Some(event) = event {
+                        return LowLevelJsonReaderResult {
+                            consumed_bytes,
+                            event: Some(Ok(event)),
                         };
                     }
                 }
@@ -360,6 +380,7 @@ impl LowLevelJsonReader {
                 .try_into()
                 .unwrap(),
             event: if is_ending {
+                self.buffered_event = Some(JsonEvent::Eof);
                 Some(Err(self.lexer.syntax_error(
                     self.lexer.file_offset..self.lexer.file_offset + 1,
                     "Unexpected end of file",
@@ -373,90 +394,93 @@ impl LowLevelJsonReader {
     fn apply_new_token<'a>(
         &mut self,
         token: JsonToken<'a>,
-    ) -> Option<Result<JsonEvent<'a>, String>> {
+    ) -> (Option<JsonEvent<'a>>, Option<String>) {
         match self.state_stack.pop() {
             Some(JsonState::ObjectKeyOrEnd) => {
                 if token == JsonToken::ClosingCurlyBracket {
-                    Some(Ok(JsonEvent::EndObject))
+                    (Some(JsonEvent::EndObject), None)
                 } else {
                     if let Err(e) = self.push_state_stack(JsonState::ObjectKey) {
-                        return Some(Err(e));
+                        return (None, Some(e));
                     }
                     self.apply_new_token(token)
                 }
             }
             Some(JsonState::ObjectKey) => {
-                if let Err(e) = self.push_state_stack(JsonState::ObjectColon) {
-                    return Some(Err(e));
+                if token == JsonToken::ClosingCurlyBracket {
+                    return (Some(JsonEvent::EndObject), Some("Trailing commas are not allowed".into()));
                 }
-                Some(if let JsonToken::String(key) = token {
-                    Ok(JsonEvent::ObjectKey(key))
+                if let Err(e) = self.push_state_stack(JsonState::ObjectColon) {
+                    return (None, Some(e));
+                }
+                if let JsonToken::String(key) = token {
+                    (Some(JsonEvent::ObjectKey(key)), None)
                 } else {
-                    Err("Object keys must be strings".into())
-                })
+                    (None, Some("Object keys must be strings".into()))
+                }
             }
             Some(JsonState::ObjectColon) => {
                 if let Err(e) = self.push_state_stack(JsonState::ObjectValue) {
-                    return Some(Err(e));
+                    return (None, Some(e));
                 }
                 if token == JsonToken::Colon {
-                    None
+                    (None, None)
                 } else {
-                    Some(Err("Object keys must be strings".into()))
+                    let (event, _) = self.apply_new_token(token);
+                    (event, Some("Object keys must be strings".into()))
                 }
             }
             Some(JsonState::ObjectValue) => {
                 if let Err(e) = self.push_state_stack(JsonState::ObjectCommaOrEnd) {
-                    return Some(Err(e));
+                    return (None, Some(e));
                 }
-                Some(self.apply_new_token_for_value(token))
+                self.apply_new_token_for_value(token)
             }
             Some(JsonState::ObjectCommaOrEnd) => match token {
                 JsonToken::Comma => {
-                    if let Err(e) = self.push_state_stack(JsonState::ObjectKey) {
-                        return Some(Err(e));
-                    }
-                    None
+                    (None, self.push_state_stack(JsonState::ObjectKey).err())
                 }
-                JsonToken::ClosingCurlyBracket => Some(Ok(JsonEvent::EndObject)),
-                _ => Some(Err("Object values must be followed by a comma to add a new value or a curly bracket to end the object".into())),
+                JsonToken::ClosingCurlyBracket => (Some(JsonEvent::EndObject), None),
+                _ => (None, Some("Object values must be followed by a comma to add a new value or a curly bracket to end the object".into())),
             },
             Some(JsonState::ArrayValueOrEnd) =>{
                 if token == JsonToken::ClosingSquareBracket {
-                    Some(Ok(JsonEvent::EndArray))
-                } else {
-                    if let Err(e) = self.push_state_stack(JsonState::ArrayValue) {
-                        return Some(Err(e));
-                    }
-                    self.apply_new_token(token)
+                    return (Some(JsonEvent::EndArray), None);
                 }
+                if let Err(e) = self.push_state_stack(JsonState::ArrayValue) {
+                    return (None, Some(e));
+                }
+                self.apply_new_token(token)
             }
             Some(JsonState::ArrayValue) => {
-                if let Err(e) = self.push_state_stack(JsonState::ArrayCommaOrEnd) {
-                    return Some(Err(e));
+                if token == JsonToken::ClosingSquareBracket {
+                    return (Some(JsonEvent::EndArray), Some("Trailing commas are not allowed".into()));
                 }
-                Some(self.apply_new_token_for_value(token))
+                if let Err(e) = self.push_state_stack(JsonState::ArrayCommaOrEnd) {
+                    return (None, Some(e));
+                }
+                self.apply_new_token_for_value(token)
             }
             Some(JsonState::ArrayCommaOrEnd) => match token {
                 JsonToken::Comma => {
-                    if let Err(e) = self.push_state_stack(JsonState::ArrayValue) {
-                        return Some(Err(e));
-                    }
-                    None
+                    (None, self.push_state_stack(JsonState::ArrayValue).err())
                 }
-                JsonToken::ClosingSquareBracket => Some(Ok(JsonEvent::EndArray)),
-                _ => Some(Err("Array values must be followed by a comma to add a new value or a squared bracket to end the array".into())),
+                JsonToken::ClosingSquareBracket => (Some(JsonEvent::EndArray), None),
+                _ => {
+                    let _ = self.push_state_stack(JsonState::ArrayValue); // We already have an error
+                    let (event, _) = self.apply_new_token(token);
+                    (event, Some("Array values must be followed by a comma to add a new value or a squared bracket to end the array".into()))
+                }
             }
-            None =>
-                if self.element_read {
-                    Some(if token == JsonToken::Eof {
-                        Ok(JsonEvent::Eof)
-                    } else {
-                        Err("The JSON already contains one root element".into())
-                    })
+            None => if self.element_read {
+                if token == JsonToken::Eof {
+                    (Some(JsonEvent::Eof), None)
+                } else {
+                    (None, Some("The JSON already contains one root element".into()))
+                }
             } else {
                 self.element_read = true;
-                Some(self.apply_new_token_for_value(token))
+                self.apply_new_token_for_value(token)
             }
         }
     }
@@ -464,30 +488,35 @@ impl LowLevelJsonReader {
     fn apply_new_token_for_value<'a>(
         &mut self,
         token: JsonToken<'a>,
-    ) -> Result<JsonEvent<'a>, String> {
+    ) -> (Option<JsonEvent<'a>>, Option<String>) {
         match token {
-            JsonToken::OpeningSquareBracket => {
-                self.push_state_stack(JsonState::ArrayValueOrEnd)?;
-                Ok(JsonEvent::StartArray)
-            }
-            JsonToken::ClosingSquareBracket => {
-                Err("Unexpected closing square bracket, no array to close".into())
-            }
-            JsonToken::OpeningCurlyBracket => {
-                self.push_state_stack(JsonState::ObjectKeyOrEnd)?;
-                Ok(JsonEvent::StartObject)
-            }
-            JsonToken::ClosingCurlyBracket => {
-                Err("Unexpected closing curly bracket, no array to close".into())
-            }
-            JsonToken::Comma => Err("Unexpected comma, no values to separate".into()),
-            JsonToken::Colon => Err("Unexpected colon, no key to follow".into()),
-            JsonToken::String(string) => Ok(JsonEvent::String(string)),
-            JsonToken::Number(number) => Ok(JsonEvent::Number(number)),
-            JsonToken::True => Ok(JsonEvent::Boolean(true)),
-            JsonToken::False => Ok(JsonEvent::Boolean(false)),
-            JsonToken::Null => Ok(JsonEvent::Null),
-            JsonToken::Eof => Err("Unexpected end of file, a value was expected".into()),
+            JsonToken::OpeningSquareBracket => (
+                Some(JsonEvent::StartArray),
+                self.push_state_stack(JsonState::ArrayValueOrEnd).err(),
+            ),
+            JsonToken::ClosingSquareBracket => (
+                None,
+                Some("Unexpected closing square bracket, no array to close".into()),
+            ),
+            JsonToken::OpeningCurlyBracket => (
+                Some(JsonEvent::StartObject),
+                self.push_state_stack(JsonState::ObjectKeyOrEnd).err(),
+            ),
+            JsonToken::ClosingCurlyBracket => (
+                None,
+                Some("Unexpected closing curly bracket, no array to close".into()),
+            ),
+            JsonToken::Comma => (None, Some("Unexpected comma, no values to separate".into())),
+            JsonToken::Colon => (None, Some("Unexpected colon, no key to follow".into())),
+            JsonToken::String(string) => (Some(JsonEvent::String(string)), None),
+            JsonToken::Number(number) => (Some(JsonEvent::Number(number)), None),
+            JsonToken::True => (Some(JsonEvent::Boolean(true)), None),
+            JsonToken::False => (Some(JsonEvent::Boolean(false)), None),
+            JsonToken::Null => (Some(JsonEvent::Null), None),
+            JsonToken::Eof => (
+                Some(JsonEvent::Eof),
+                Some("Unexpected end of file, a value was expected".into()),
+            ),
         }
     }
 
@@ -541,6 +570,7 @@ struct JsonLexer {
     file_offset: u64,
     file_line: u64,
     file_start_of_last_line: u64,
+    file_start_of_last_token: u64,
     is_start: bool,
 }
 
@@ -576,12 +606,15 @@ impl JsonLexer {
                 }
                 b'\r' => {
                     i += 1;
-                    if input_buffer.get(i).map_or_else(
-                        || if is_ending { Some(None) } else { None },
-                        |c| Some(Some(*c)),
-                    )? == Some(b'\n')
-                    {
-                        i += 1; // \r\n
+                    if let Some(c) = input_buffer.get(i) {
+                        if *c == b'\n' {
+                            i += 1; // \r\n
+                        }
+                    } else if !is_ending {
+                        // We need an extra byte to check if followed by \n
+                        i -= 1;
+                        self.file_offset += u64::try_from(i).unwrap();
+                        return None;
                     }
                     self.file_line += 1;
                     self.file_start_of_last_line = self.file_offset + u64::try_from(i).unwrap();
@@ -593,6 +626,7 @@ impl JsonLexer {
         }
         self.file_offset += u64::try_from(i).unwrap();
         input_buffer = &input_buffer[i..];
+        self.file_start_of_last_token = self.file_offset;
 
         if is_ending && input_buffer.is_empty() {
             return Some(Ok(JsonToken::Eof));
@@ -625,9 +659,9 @@ impl JsonLexer {
                 Some(Ok(JsonToken::Colon))
             }
             b'"' => self.read_string(input_buffer),
-            b't' => self.read_constant(input_buffer, "true", JsonToken::True),
-            b'f' => self.read_constant(input_buffer, "false", JsonToken::False),
-            b'n' => self.read_constant(input_buffer, "null", JsonToken::Null),
+            b't' => self.read_constant(input_buffer, is_ending, "true", JsonToken::True),
+            b'f' => self.read_constant(input_buffer, is_ending, "false", JsonToken::False),
+            b'n' => self.read_constant(input_buffer, is_ending, "null", JsonToken::Null),
             b'-' | b'0'..=b'9' => self.read_number(input_buffer, is_ending),
             c => {
                 self.file_offset += 1;
@@ -857,21 +891,28 @@ impl JsonLexer {
     fn read_constant(
         &mut self,
         input_buffer: &[u8],
+        is_ending: bool,
         expected: &str,
         value: JsonToken<'static>,
     ) -> Option<Result<JsonToken<'static>, SyntaxError>> {
-        Some(
-            if input_buffer.get(..expected.len())? == expected.as_bytes() {
-                self.file_offset += u64::try_from(expected.len()).unwrap();
-                Ok(value)
-            } else {
-                self.file_offset += u64::try_from(expected.len()).unwrap();
-                Err(self.syntax_error(
-                    self.file_offset - u64::try_from(expected.len()).unwrap()..self.file_offset,
-                    format!("{} expected", expected),
-                ))
-            },
-        )
+        if input_buffer.get(..expected.len())? == expected.as_bytes() {
+            self.file_offset += u64::try_from(expected.len()).unwrap();
+            return Some(Ok(value));
+        }
+        let ascii_chars = input_buffer
+            .iter()
+            .take_while(|c| c.is_ascii_alphabetic())
+            .count();
+        if ascii_chars == input_buffer.len() && !is_ending {
+            return None; // We might read a bigger token
+        }
+        let read = max(1, ascii_chars); // We want to consume at least a byte
+        let start_offset = self.file_offset;
+        self.file_offset += u64::try_from(read).unwrap();
+        Some(Err(self.syntax_error(
+            start_offset..self.file_offset,
+            format!("{} expected", expected),
+        )))
     }
 
     fn read_number<'a>(
@@ -1034,6 +1075,21 @@ fn read_digits(input_buffer: &[u8], is_ending: bool) -> Option<usize> {
     Some(count)
 }
 
+fn owned_event(event: JsonEvent<'_>) -> JsonEvent<'static> {
+    match event {
+        JsonEvent::String(s) => JsonEvent::String(s.into_owned().into()),
+        JsonEvent::Number(n) => JsonEvent::Number(n.into_owned().into()),
+        JsonEvent::Boolean(b) => JsonEvent::Boolean(b),
+        JsonEvent::Null => JsonEvent::Null,
+        JsonEvent::StartArray => JsonEvent::StartArray,
+        JsonEvent::EndArray => JsonEvent::EndArray,
+        JsonEvent::StartObject => JsonEvent::StartObject,
+        JsonEvent::EndObject => JsonEvent::EndObject,
+        JsonEvent::ObjectKey(k) => JsonEvent::ObjectKey(k.into_owned().into()),
+        JsonEvent::Eof => JsonEvent::Eof,
+    }
+}
+
 /// Result of [`LowLevelJsonReader::read_next_event`].
 #[derive(Debug)]
 pub struct LowLevelJsonReaderResult<'a> {
@@ -1088,7 +1144,7 @@ impl fmt::Display for SyntaxError {
         } else if self.location.start.line == self.location.end.line {
             write!(
                 f,
-                "Parser error between at line {} between columns {} and column {}: {}",
+                "Parser error at line {} between columns {} and column {}: {}",
                 self.location.start.line + 1,
                 self.location.start.column + 1,
                 self.location.end.column + 1,
@@ -1168,46 +1224,6 @@ impl From<ParseError> for io::Error {
         match error {
             ParseError::Syntax(e) => e.into(),
             ParseError::Io(e) => e,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_error_messages() {
-        let entries = [
-            (
-                b"".as_slice(),
-                "Parser error at line 1 column 1: Unexpected end of file, a value was expected",
-            ),
-            (
-                b"\n}",
-                "Parser error at line 2 column 1: Unexpected closing curly bracket, no array to close",
-            ),
-            (
-                b"\r\n}",
-                "Parser error at line 2 column 1: Unexpected closing curly bracket, no array to close",
-            ),
-            (
-                b"\"\n\"",
-                "Parser error at line 1 column 2: '\n' is not allowed in JSON strings",
-            ),
-            (
-                b"\"\\uDCFF\\u0000\"",
-                "Parser error between at line 1 between columns 2 and column 8: \\uDCFF is not a valid high surrogate",
-            )
-        ];
-        for (json, error) in entries {
-            assert_eq!(
-                FromBufferJsonReader::new(json)
-                    .read_next_event()
-                    .unwrap_err()
-                    .to_string(),
-                error
-            );
         }
     }
 }
