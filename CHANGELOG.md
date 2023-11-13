@@ -1,3 +1,11 @@
+## [0.2.0-alpha.2] - 2023-11-13
+
+## Changed
+- Improves error messages.
+- Improves ordering of tokens and errors when errors are present.
+- Fixes file position in case of errors.
+
+
 ## [0.2.0-alpha.1] - 2023-09-23
 
 ### Added
