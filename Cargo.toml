@@ -22,12 +22,11 @@ async-tokio = ["dep:tokio"]
 tokio = { version = "1.29", optional = true, features = ["io-util"] }
 
 [dev-dependencies]
-criterion = "0.5"
+codspeed-criterion-compat = "2.3.3"
 tokio = { version = "1.29", features = ["rt", "macros"] }
-serde_json = "1"
 
 [[bench]]
-name = "test_suite"
+name = "parser"
 harness = false
 
 [package.metadata.docs.rs]

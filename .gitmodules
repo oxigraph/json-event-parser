@@ -1,3 +1,6 @@
 [submodule "JSONTestSuite"]
 	path = JSONTestSuite
 	url = https://github.com/nst/JSONTestSuite.git
+[submodule "benches/json-benchmark"]
+	path = benches/json-benchmark
+	url = https://github.com/serde-rs/json-benchmark.git
