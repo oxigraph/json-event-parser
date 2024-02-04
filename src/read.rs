@@ -111,7 +111,7 @@ impl<R: Read> FromReadJsonReader<R> {
     }
 }
 
-/// Parses a JSON file from a [`Read`] implementation.
+/// Parses a JSON file from an [`AsyncRead`] implementation.
 ///
 /// ```
 /// use json_event_parser::{FromTokioAsyncReadJsonReader, JsonEvent};
