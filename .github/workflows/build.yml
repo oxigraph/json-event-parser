@@ -84,7 +84,7 @@ jobs:
       - run: cargo install typos-cli || true
       - run: typos
 
-  codespeed:
+  codspeed:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -98,3 +98,16 @@ jobs:
         with:
           run: cargo codspeed run
           token: ${{ secrets.CODSPEED_TOKEN }}
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - run: rustup update && rustup toolchain install nightly
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-fuzz || true
+      - run: python3 build_corpus.py
+        working-directory: ./fuzz
+      - run: cargo +nightly fuzz run parse -- -max_total_time=300 -max_len=128
