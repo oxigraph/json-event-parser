@@ -538,6 +538,12 @@ impl LowLevelJsonReader {
     }
 }
 
+impl Default for LowLevelJsonReader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]
 enum JsonState {
     ObjectKey,
