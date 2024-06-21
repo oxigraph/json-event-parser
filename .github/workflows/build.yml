@@ -106,8 +106,7 @@ jobs:
           submodules: true
       - run: rustup update && rustup toolchain install nightly
       - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
-        with: { tool: cargo-fuzz }
+      - run: cargo install --force cargo-fuzz
       - run: python3 build_corpus.py
         working-directory: ./fuzz
       - run: cargo +nightly fuzz run parse -- -max_total_time=300 -max_len=128
