@@ -1,4 +1,4 @@
-use json_event_parser::{FromBufferJsonReader, JsonEvent, ToWriteJsonWriter};
+use json_event_parser::{JsonEvent, SliceJsonParser, WriterJsonSerializer};
 
 #[test]
 fn test_recovery() {
@@ -14,10 +14,10 @@ fn test_recovery() {
     ];
 
     for (input, expected_output) in entries {
-        let mut reader = FromBufferJsonReader::new(input);
-        let mut writer = ToWriteJsonWriter::new(Vec::new());
+        let mut reader = SliceJsonParser::new(input);
+        let mut writer = WriterJsonSerializer::new(Vec::new());
         loop {
-            match reader.read_next_event() {
+            match reader.parse_next() {
                 Ok(JsonEvent::Eof) => break,
                 Ok(event) => writer.write_event(event).unwrap(),
                 Err(_) => (),
@@ -59,8 +59,8 @@ fn test_error_messages() {
     ];
     for (json, error) in entries {
         assert_eq!(
-            FromBufferJsonReader::new(json)
-                .read_next_event()
+            SliceJsonParser::new(json)
+                .parse_next()
                 .unwrap_err()
                 .to_string(),
             error

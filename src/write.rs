@@ -6,9 +6,9 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 /// A JSON streaming writer writing to a [`Write`] implementation.
 ///
 /// ```
-/// use json_event_parser::{ToWriteJsonWriter, JsonEvent};
+/// use json_event_parser::{JsonEvent, WriterJsonSerializer};
 ///
-/// let mut writer = ToWriteJsonWriter::new(Vec::new());
+/// let mut writer = WriterJsonSerializer::new(Vec::new());
 /// writer.write_event(JsonEvent::StartObject)?;
 /// writer.write_event(JsonEvent::ObjectKey("foo".into()))?;
 /// writer.write_event(JsonEvent::Number("1".into()))?;
@@ -17,16 +17,16 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 /// assert_eq!(writer.finish()?.as_slice(), b"{\"foo\":1}");
 /// # std::io::Result::Ok(())
 /// ```
-pub struct ToWriteJsonWriter<W: Write> {
+pub struct WriterJsonSerializer<W: Write> {
     write: W,
-    writer: LowLevelJsonWriter,
+    writer: LowLevelJsonSerializer,
 }
 
-impl<W: Write> ToWriteJsonWriter<W> {
+impl<W: Write> WriterJsonSerializer<W> {
     pub const fn new(write: W) -> Self {
         Self {
             write,
-            writer: LowLevelJsonWriter::new(),
+            writer: LowLevelJsonSerializer::new(),
         }
     }
 
@@ -43,13 +43,15 @@ impl<W: Write> ToWriteJsonWriter<W> {
 /// A JSON streaming writer writing to an [`AsyncWrite`] implementation.
 ///
 /// ```
-/// use json_event_parser::{ToTokioAsyncWriteJsonWriter, JsonEvent};
+/// use json_event_parser::{JsonEvent, TokioAsyncWriterJsonSerializer};
 ///
 /// # #[tokio::main(flavor = "current_thread")]
 /// # async fn main() -> ::std::io::Result<()> {
-/// let mut writer = ToTokioAsyncWriteJsonWriter::new(Vec::new());
+/// let mut writer = TokioAsyncWriterJsonSerializer::new(Vec::new());
 /// writer.write_event(JsonEvent::StartObject).await?;
-/// writer.write_event(JsonEvent::ObjectKey("foo".into())).await?;
+/// writer
+///     .write_event(JsonEvent::ObjectKey("foo".into()))
+///     .await?;
 /// writer.write_event(JsonEvent::Number("1".into())).await?;
 /// writer.write_event(JsonEvent::EndObject).await?;
 /// assert_eq!(writer.finish()?.as_slice(), b"{\"foo\":1}");
@@ -57,18 +59,18 @@ impl<W: Write> ToWriteJsonWriter<W> {
 /// # }
 /// ```
 #[cfg(feature = "async-tokio")]
-pub struct ToTokioAsyncWriteJsonWriter<W: AsyncWrite + Unpin> {
+pub struct TokioAsyncWriterJsonSerializer<W: AsyncWrite + Unpin> {
     write: W,
-    writer: LowLevelJsonWriter,
+    writer: LowLevelJsonSerializer,
     buffer: Vec<u8>,
 }
 
 #[cfg(feature = "async-tokio")]
-impl<W: AsyncWrite + Unpin> ToTokioAsyncWriteJsonWriter<W> {
+impl<W: AsyncWrite + Unpin> TokioAsyncWriterJsonSerializer<W> {
     pub const fn new(write: W) -> Self {
         Self {
             write,
-            writer: LowLevelJsonWriter::new(),
+            writer: LowLevelJsonSerializer::new(),
             buffer: Vec::new(),
         }
     }
@@ -88,12 +90,12 @@ impl<W: AsyncWrite + Unpin> ToTokioAsyncWriteJsonWriter<W> {
 
 /// A low-level JSON streaming writer writing to a [`Write`] implementation.
 ///
-/// YOu probably want to use [`ToWriteJsonWriter`] instead.
+/// YOu probably want to use [`WriterJsonSerializer`] instead.
 ///
 /// ```
-/// use json_event_parser::{JsonEvent, LowLevelJsonWriter};
+/// use json_event_parser::{JsonEvent, LowLevelJsonSerializer};
 ///
-/// let mut writer = LowLevelJsonWriter::new();
+/// let mut writer = LowLevelJsonSerializer::new();
 /// let mut output = Vec::new();
 /// writer.write_event(JsonEvent::StartObject, &mut output)?;
 /// writer.write_event(JsonEvent::ObjectKey("foo".into()), &mut output)?;
@@ -105,12 +107,12 @@ impl<W: AsyncWrite + Unpin> ToTokioAsyncWriteJsonWriter<W> {
 /// ```
 
 #[derive(Default)]
-pub struct LowLevelJsonWriter {
+pub struct LowLevelJsonSerializer {
     state_stack: Vec<JsonState>,
     element_written: bool,
 }
 
-impl LowLevelJsonWriter {
+impl LowLevelJsonSerializer {
     pub const fn new() -> Self {
         Self {
             state_stack: Vec::new(),

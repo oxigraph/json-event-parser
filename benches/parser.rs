@@ -1,5 +1,5 @@
 use codspeed_criterion_compat::{criterion_group, criterion_main, Criterion};
-use json_event_parser::{FromReadJsonReader, JsonEvent};
+use json_event_parser::{JsonEvent, ReaderJsonParser};
 use std::fs::{self, read_dir};
 
 fn bench_parse_json_benchmark(c: &mut Criterion) {
@@ -11,9 +11,9 @@ fn bench_parse_json_benchmark(c: &mut Criterion) {
         .unwrap();
         c.bench_function(dataset, |b| {
             b.iter(|| {
-                let mut reader = FromReadJsonReader::new(data.as_slice());
-                while reader.read_next_event().unwrap() != JsonEvent::Eof {
-                    //read more
+                let mut reader = ReaderJsonParser::new(data.as_slice());
+                while reader.parse_next().unwrap() != JsonEvent::Eof {
+                    // read more
                 }
             })
         });
@@ -25,9 +25,9 @@ fn bench_parse_testsuite(c: &mut Criterion) {
 
     c.bench_function("JSON test suite", |b| {
         b.iter(|| {
-            let mut reader = FromReadJsonReader::new(example.as_slice());
-            while reader.read_next_event().unwrap() != JsonEvent::Eof {
-                //read more
+            let mut reader = ReaderJsonParser::new(example.as_slice());
+            while reader.parse_next().unwrap() != JsonEvent::Eof {
+                // read more
             }
         })
     });
