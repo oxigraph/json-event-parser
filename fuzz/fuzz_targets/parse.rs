@@ -18,7 +18,7 @@ fn parse_chunks(chunks: &[&[u8]]) -> (String, Option<SyntaxError>) {
             let LowLevelJsonReaderResult {
                 event,
                 consumed_bytes,
-            } = reader.read_next_event(&input_buffer[input_cursor..], i == chunks.len() - 1);
+            } = reader.parse_next(&input_buffer[input_cursor..], i == chunks.len() - 1);
             input_cursor += consumed_bytes;
             match event {
                 Some(Ok(JsonEvent::Eof)) => {

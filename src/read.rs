@@ -16,27 +16,27 @@ const MAX_BUFFER_SIZE: usize = 4096 * 4096;
 ///
 ///
 /// ```
-/// use json_event_parser::{FromReadJsonReader, JsonEvent};
+/// use json_event_parser::{JsonEvent, ReaderJsonParser};
 ///
-/// let mut reader = FromReadJsonReader::new(b"{\"foo\": 1}".as_slice());
-/// assert_eq!(reader.read_next_event()?, JsonEvent::StartObject);
-/// assert_eq!(reader.read_next_event()?, JsonEvent::ObjectKey("foo".into()));
-/// assert_eq!(reader.read_next_event()?, JsonEvent::Number("1".into()));
-/// assert_eq!(reader.read_next_event()?, JsonEvent::EndObject);
-/// assert_eq!(reader.read_next_event()?, JsonEvent::Eof);
+/// let mut reader = ReaderJsonParser::new(b"{\"foo\": 1}".as_slice());
+/// assert_eq!(reader.parse_next()?, JsonEvent::StartObject);
+/// assert_eq!(reader.parse_next()?, JsonEvent::ObjectKey("foo".into()));
+/// assert_eq!(reader.parse_next()?, JsonEvent::Number("1".into()));
+/// assert_eq!(reader.parse_next()?, JsonEvent::EndObject);
+/// assert_eq!(reader.parse_next()?, JsonEvent::Eof);
 /// # std::io::Result::Ok(())
 /// ```
-pub struct FromReadJsonReader<R: Read> {
+pub struct ReaderJsonParser<R: Read> {
     input_buffer: Vec<u8>,
     input_buffer_start: usize,
     input_buffer_end: usize,
     max_buffer_size: usize,
     is_ending: bool,
     read: R,
-    parser: LowLevelJsonReader,
+    parser: LowLevelJsonParser,
 }
 
-impl<R: Read> FromReadJsonReader<R> {
+impl<R: Read> ReaderJsonParser<R> {
     pub const fn new(read: R) -> Self {
         Self {
             input_buffer: Vec::new(),
@@ -45,7 +45,7 @@ impl<R: Read> FromReadJsonReader<R> {
             max_buffer_size: MAX_BUFFER_SIZE,
             is_ending: false,
             read,
-            parser: LowLevelJsonReader::new(),
+            parser: LowLevelJsonParser::new(),
         }
     }
 
@@ -55,13 +55,13 @@ impl<R: Read> FromReadJsonReader<R> {
         self
     }
 
-    pub fn read_next_event(&mut self) -> Result<JsonEvent<'_>, ParseError> {
+    pub fn parse_next(&mut self) -> Result<JsonEvent<'_>, JsonParseError> {
         loop {
             {
-                let LowLevelJsonReaderResult {
+                let LowLevelJsonParserResult {
                     event,
                     consumed_bytes,
-                } = self.parser.read_next_event(
+                } = self.parser.parse_next(
                     #[allow(unsafe_code)]
                     unsafe {
                         let input_buffer_ptr: *const [u8] =
@@ -109,37 +109,45 @@ impl<R: Read> FromReadJsonReader<R> {
             self.is_ending = read == 0;
         }
     }
+
+    #[deprecated(note = "Use parse_next() instead")]
+    pub fn read_next_event(&mut self) -> Result<JsonEvent<'_>, JsonParseError> {
+        self.parse_next()
+    }
 }
 
 /// Parses a JSON file from an [`AsyncRead`] implementation.
 ///
 /// ```
-/// use json_event_parser::{FromTokioAsyncReadJsonReader, JsonEvent};
+/// use json_event_parser::{JsonEvent, TokioAsyncReaderJsonParser};
 ///
 /// # #[tokio::main(flavor = "current_thread")]
 /// # async fn main() -> ::std::io::Result<()> {
-/// let mut reader = FromTokioAsyncReadJsonReader::new(b"{\"foo\": 1}".as_slice());
-/// assert_eq!(reader.read_next_event().await?, JsonEvent::StartObject);
-/// assert_eq!(reader.read_next_event().await?, JsonEvent::ObjectKey("foo".into()));
-/// assert_eq!(reader.read_next_event().await?, JsonEvent::Number("1".into()));
-/// assert_eq!(reader.read_next_event().await?, JsonEvent::EndObject);
-/// assert_eq!(reader.read_next_event().await?, JsonEvent::Eof);
+/// let mut reader = TokioAsyncReaderJsonParser::new(b"{\"foo\": 1}".as_slice());
+/// assert_eq!(reader.parse_next().await?, JsonEvent::StartObject);
+/// assert_eq!(
+///     reader.parse_next().await?,
+///     JsonEvent::ObjectKey("foo".into())
+/// );
+/// assert_eq!(reader.parse_next().await?, JsonEvent::Number("1".into()));
+/// assert_eq!(reader.parse_next().await?, JsonEvent::EndObject);
+/// assert_eq!(reader.parse_next().await?, JsonEvent::Eof);
 /// # Ok(())
 /// # }
 /// ```
 #[cfg(feature = "async-tokio")]
-pub struct FromTokioAsyncReadJsonReader<R: AsyncRead + Unpin> {
+pub struct TokioAsyncReaderJsonParser<R: AsyncRead + Unpin> {
     input_buffer: Vec<u8>,
     input_buffer_start: usize,
     input_buffer_end: usize,
     max_buffer_size: usize,
     is_ending: bool,
     read: R,
-    parser: LowLevelJsonReader,
+    parser: LowLevelJsonParser,
 }
 
 #[cfg(feature = "async-tokio")]
-impl<R: AsyncRead + Unpin> FromTokioAsyncReadJsonReader<R> {
+impl<R: AsyncRead + Unpin> TokioAsyncReaderJsonParser<R> {
     pub const fn new(read: R) -> Self {
         Self {
             input_buffer: Vec::new(),
@@ -148,7 +156,7 @@ impl<R: AsyncRead + Unpin> FromTokioAsyncReadJsonReader<R> {
             max_buffer_size: MAX_BUFFER_SIZE,
             is_ending: false,
             read,
-            parser: LowLevelJsonReader::new(),
+            parser: LowLevelJsonParser::new(),
         }
     }
 
@@ -158,13 +166,13 @@ impl<R: AsyncRead + Unpin> FromTokioAsyncReadJsonReader<R> {
         self
     }
 
-    pub async fn read_next_event(&mut self) -> Result<JsonEvent<'_>, ParseError> {
+    pub async fn parse_next(&mut self) -> Result<JsonEvent<'_>, JsonParseError> {
         loop {
             {
-                let LowLevelJsonReaderResult {
+                let LowLevelJsonParserResult {
                     event,
                     consumed_bytes,
-                } = self.parser.read_next_event(
+                } = self.parser.parse_next(
                     #[allow(unsafe_code)]
                     unsafe {
                         let input_buffer_ptr: *const [u8] =
@@ -213,85 +221,113 @@ impl<R: AsyncRead + Unpin> FromTokioAsyncReadJsonReader<R> {
             self.is_ending = read == 0;
         }
     }
+
+    #[deprecated(note = "Use parse_next() instead")]
+    pub async fn read_next_event(&mut self) -> Result<JsonEvent<'_>, JsonParseError> {
+        self.parse_next().await
+    }
 }
 
 /// Parses a JSON file from a `&[u8]`.
 ///
 /// ```
-/// use json_event_parser::{FromBufferJsonReader, JsonEvent};
+/// use json_event_parser::{JsonEvent, SliceJsonParser};
 ///
-/// let mut reader = FromBufferJsonReader::new(b"{\"foo\": 1}");
-/// assert_eq!(reader.read_next_event()?, JsonEvent::StartObject);
-/// assert_eq!(reader.read_next_event()?, JsonEvent::ObjectKey("foo".into()));
-/// assert_eq!(reader.read_next_event()?, JsonEvent::Number("1".into()));
-/// assert_eq!(reader.read_next_event()?, JsonEvent::EndObject);
-/// assert_eq!(reader.read_next_event()?, JsonEvent::Eof);
+/// let mut reader = SliceJsonParser::new(b"{\"foo\": 1}");
+/// assert_eq!(reader.parse_next()?, JsonEvent::StartObject);
+/// assert_eq!(reader.parse_next()?, JsonEvent::ObjectKey("foo".into()));
+/// assert_eq!(reader.parse_next()?, JsonEvent::Number("1".into()));
+/// assert_eq!(reader.parse_next()?, JsonEvent::EndObject);
+/// assert_eq!(reader.parse_next()?, JsonEvent::Eof);
 /// # std::io::Result::Ok(())
 /// ```
-pub struct FromBufferJsonReader<'a> {
+pub struct SliceJsonParser<'a> {
     input_buffer: &'a [u8],
-    parser: LowLevelJsonReader,
+    parser: LowLevelJsonParser,
 }
 
-impl<'a> FromBufferJsonReader<'a> {
+impl<'a> SliceJsonParser<'a> {
     pub const fn new(buffer: &'a [u8]) -> Self {
         Self {
             input_buffer: buffer,
-            parser: LowLevelJsonReader::new(),
+            parser: LowLevelJsonParser::new(),
         }
     }
 
-    pub fn read_next_event(&mut self) -> Result<JsonEvent<'_>, SyntaxError> {
+    pub fn parse_next(&mut self) -> Result<JsonEvent<'_>, JsonSyntaxError> {
         loop {
-            let LowLevelJsonReaderResult {
+            let LowLevelJsonParserResult {
                 event,
                 consumed_bytes,
-            } = self.parser.read_next_event(self.input_buffer, true);
+            } = self.parser.parse_next(self.input_buffer, true);
             self.input_buffer = &self.input_buffer[consumed_bytes..];
             if let Some(event) = event {
                 return event;
             }
         }
     }
+
+    #[deprecated(note = "Use parse_next() instead")]
+    pub fn read_next_event(&mut self) -> Result<JsonEvent<'_>, JsonSyntaxError> {
+        self.parse_next()
+    }
 }
 
 /// A low-level JSON parser acting on a provided buffer.
 ///
 /// Does not allocate except a stack to check if array and object opening and closing are properly nested.
-/// This stack size might be limited using the method [`with_max_stack_size`](LowLevelJsonReader::with_max_stack_size).
+/// This stack size might be limited using the method [`with_max_stack_size`](LowLevelJsonParser::with_max_stack_size).
 ///
 /// ```
 /// # use std::borrow::Cow;
-/// use json_event_parser::{LowLevelJsonReader, JsonEvent, LowLevelJsonReaderResult};
+/// use json_event_parser::{JsonEvent, LowLevelJsonParser, LowLevelJsonParserResult};
 ///
-/// let mut reader = LowLevelJsonReader::new();
+/// let mut reader = LowLevelJsonParser::new();
 /// assert!(matches!(
-///     reader.read_next_event(b"{\"foo".as_slice(), false),
-///     LowLevelJsonReaderResult { consumed_bytes: 1, event: Some(Ok(JsonEvent::StartObject))}
+///     reader.parse_next(b"{\"foo".as_slice(), false),
+///     LowLevelJsonParserResult {
+///         consumed_bytes: 1,
+///         event: Some(Ok(JsonEvent::StartObject))
+///     }
 /// ));
 /// assert!(matches!(
-///     reader.read_next_event(b"\"foo".as_slice(), false),
-///     LowLevelJsonReaderResult { consumed_bytes: 0, event: None }
+///     reader.parse_next(b"\"foo".as_slice(), false),
+///     LowLevelJsonParserResult {
+///         consumed_bytes: 0,
+///         event: None
+///     }
 /// ));
 /// assert!(matches!(
-///     reader.read_next_event(b"\"foo\": 1}".as_slice(), false),
-///     LowLevelJsonReaderResult { consumed_bytes: 5, event: Some(Ok(JsonEvent::ObjectKey(Cow::Borrowed("foo")))) }
+///     reader.parse_next(b"\"foo\": 1}".as_slice(), false),
+///     LowLevelJsonParserResult {
+///         consumed_bytes: 5,
+///         event: Some(Ok(JsonEvent::ObjectKey(Cow::Borrowed("foo"))))
+///     }
 /// ));
 /// assert!(matches!(
-///     reader.read_next_event(b": 1}".as_slice(), false),
-///     LowLevelJsonReaderResult { consumed_bytes: 3, event: Some(Ok(JsonEvent::Number(Cow::Borrowed("1")))) }
+///     reader.parse_next(b": 1}".as_slice(), false),
+///     LowLevelJsonParserResult {
+///         consumed_bytes: 3,
+///         event: Some(Ok(JsonEvent::Number(Cow::Borrowed("1"))))
+///     }
 /// ));
 /// assert!(matches!(
-///     reader.read_next_event(b"}".as_slice(), false),
-///     LowLevelJsonReaderResult { consumed_bytes: 1, event: Some(Ok(JsonEvent::EndObject)) }
+///     reader.parse_next(b"}".as_slice(), false),
+///     LowLevelJsonParserResult {
+///         consumed_bytes: 1,
+///         event: Some(Ok(JsonEvent::EndObject))
+///     }
 /// ));
 /// assert!(matches!(
-///     reader.read_next_event(b"".as_slice(), true),
-///     LowLevelJsonReaderResult { consumed_bytes: 0, event: Some(Ok(JsonEvent::Eof)) }
+///     reader.parse_next(b"".as_slice(), true),
+///     LowLevelJsonParserResult {
+///         consumed_bytes: 0,
+///         event: Some(Ok(JsonEvent::Eof))
+///     }
 /// ));
 /// # std::io::Result::Ok(())
 /// ```
-pub struct LowLevelJsonReader {
+pub struct LowLevelJsonParser {
     lexer: JsonLexer,
     state_stack: Vec<JsonState>,
     max_state_stack_size: usize,
@@ -299,7 +335,7 @@ pub struct LowLevelJsonReader {
     buffered_event: Option<JsonEvent<'static>>,
 }
 
-impl LowLevelJsonReader {
+impl LowLevelJsonParser {
     pub const fn new() -> Self {
         Self {
             lexer: JsonLexer {
@@ -325,13 +361,13 @@ impl LowLevelJsonReader {
     /// Reads a new event from the data in `input_buffer`.
     ///
     /// `is_ending` must be set to true if all the JSON data have been already consumed or are in `input_buffer`.
-    pub fn read_next_event<'a>(
+    pub fn parse_next<'a>(
         &mut self,
         input_buffer: &'a [u8],
         is_ending: bool,
-    ) -> LowLevelJsonReaderResult<'a> {
+    ) -> LowLevelJsonParserResult<'a> {
         if let Some(event) = self.buffered_event.take() {
-            return LowLevelJsonReaderResult {
+            return LowLevelJsonParserResult {
                 consumed_bytes: 0,
                 event: Some(Ok(event)),
             };
@@ -355,27 +391,27 @@ impl LowLevelJsonReader {
                     });
                     if let Some(error) = error {
                         self.buffered_event = event.map(owned_event);
-                        return LowLevelJsonReaderResult {
+                        return LowLevelJsonParserResult {
                             consumed_bytes,
                             event: Some(Err(error)),
                         };
                     }
                     if let Some(event) = event {
-                        return LowLevelJsonReaderResult {
+                        return LowLevelJsonParserResult {
                             consumed_bytes,
                             event: Some(Ok(event)),
                         };
                     }
                 }
                 Err(error) => {
-                    return LowLevelJsonReaderResult {
+                    return LowLevelJsonParserResult {
                         consumed_bytes,
                         event: Some(Err(error)),
                     }
                 }
             }
         }
-        LowLevelJsonReaderResult {
+        LowLevelJsonParserResult {
             consumed_bytes: (self.lexer.file_offset - start_file_offset)
                 .try_into()
                 .unwrap(),
@@ -389,6 +425,15 @@ impl LowLevelJsonReader {
                 None
             },
         }
+    }
+
+    #[deprecated(note = "Use parse_next() instead")]
+    pub fn read_next_event<'a>(
+        &mut self,
+        input_buffer: &'a [u8],
+        is_ending: bool,
+    ) -> LowLevelJsonParserResult<'a> {
+        self.parse_next(input_buffer, is_ending)
     }
 
     fn apply_new_token<'a>(
@@ -538,7 +583,7 @@ impl LowLevelJsonReader {
     }
 }
 
-impl Default for LowLevelJsonReader {
+impl Default for LowLevelJsonParser {
     fn default() -> Self {
         Self::new()
     }
@@ -585,7 +630,7 @@ impl JsonLexer {
         &mut self,
         mut input_buffer: &'a [u8],
         is_ending: bool,
-    ) -> Option<Result<JsonToken<'a>, SyntaxError>> {
+    ) -> Option<Result<JsonToken<'a>, JsonSyntaxError>> {
         // We remove BOM at the beginning
         if self.is_start {
             if input_buffer.len() < 3 && !is_ending {
@@ -686,7 +731,7 @@ impl JsonLexer {
     fn read_string<'a>(
         &mut self,
         input_buffer: &'a [u8],
-    ) -> Option<Result<JsonToken<'a>, SyntaxError>> {
+    ) -> Option<Result<JsonToken<'a>, JsonSyntaxError>> {
         let mut error = None;
         let mut string: Option<(String, usize)> = None;
         let mut next_byte_offset = 1;
@@ -900,7 +945,7 @@ impl JsonLexer {
         is_ending: bool,
         expected: &str,
         value: JsonToken<'static>,
-    ) -> Option<Result<JsonToken<'static>, SyntaxError>> {
+    ) -> Option<Result<JsonToken<'static>, JsonSyntaxError>> {
         if input_buffer.get(..expected.len())? == expected.as_bytes() {
             self.file_offset += u64::try_from(expected.len()).unwrap();
             return Some(Ok(value));
@@ -925,7 +970,7 @@ impl JsonLexer {
         &mut self,
         input_buffer: &'a [u8],
         is_ending: bool,
-    ) -> Option<Result<JsonToken<'a>, SyntaxError>> {
+    ) -> Option<Result<JsonToken<'a>, JsonSyntaxError>> {
         let mut next_byte_offset = 0;
         if *input_buffer.get(next_byte_offset)? == b'-' {
             next_byte_offset += 1;
@@ -1021,7 +1066,7 @@ impl JsonLexer {
         &self,
         input_buffer: &'a [u8],
         start_position: u64,
-    ) -> (Cow<'a, str>, Option<SyntaxError>) {
+    ) -> (Cow<'a, str>, Option<JsonSyntaxError>) {
         match str::from_utf8(input_buffer) {
             Ok(str) => (Cow::Borrowed(str), None),
             Err(e) => (
@@ -1034,16 +1079,16 @@ impl JsonLexer {
         }
     }
 
-    fn syntax_error(&self, file_offset: Range<u64>, message: impl Into<String>) -> SyntaxError {
+    fn syntax_error(&self, file_offset: Range<u64>, message: impl Into<String>) -> JsonSyntaxError {
         let start_file_offset = max(file_offset.start, self.file_start_of_last_line);
-        SyntaxError {
+        JsonSyntaxError {
             location: TextPosition {
                 line: self.file_line,
-                column: start_file_offset - self.file_start_of_last_line, //TODO: unicode
+                column: start_file_offset - self.file_start_of_last_line, // TODO: unicode
                 offset: start_file_offset,
             }..TextPosition {
                 line: self.file_line,
-                column: file_offset.end - self.file_start_of_last_line, //TODO: unicode
+                column: file_offset.end - self.file_start_of_last_line, // TODO: unicode
                 offset: file_offset.end,
             },
             message: message.into(),
@@ -1096,13 +1141,13 @@ fn owned_event(event: JsonEvent<'_>) -> JsonEvent<'static> {
     }
 }
 
-/// Result of [`LowLevelJsonReader::read_next_event`].
+/// Result of [`LowLevelJsonParser::parse_next`].
 #[derive(Debug)]
-pub struct LowLevelJsonReaderResult<'a> {
+pub struct LowLevelJsonParserResult<'a> {
     /// How many bytes have been read from `input_buffer` and should be removed from it.
     pub consumed_bytes: usize,
     /// A possible new event
-    pub event: Option<Result<JsonEvent<'a>, SyntaxError>>,
+    pub event: Option<Result<JsonEvent<'a>, JsonSyntaxError>>,
 }
 
 /// A position in a text i.e. a `line` number starting from 0, a `column` number starting from 0 (in number of code points) and a global file `offset` starting from 0 (in number of bytes).
@@ -1117,12 +1162,12 @@ pub struct TextPosition {
 ///
 /// It is composed of a message and a byte range in the input.
 #[derive(Debug)]
-pub struct SyntaxError {
+pub struct JsonSyntaxError {
     location: Range<TextPosition>,
     message: String,
 }
 
-impl SyntaxError {
+impl JsonSyntaxError {
     /// The location of the error inside of the file.
     #[inline]
     pub fn location(&self) -> Range<TextPosition> {
@@ -1136,7 +1181,7 @@ impl SyntaxError {
     }
 }
 
-impl fmt::Display for SyntaxError {
+impl fmt::Display for JsonSyntaxError {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.location.start.offset + 1 >= self.location.end.offset {
@@ -1170,27 +1215,27 @@ impl fmt::Display for SyntaxError {
     }
 }
 
-impl Error for SyntaxError {}
+impl Error for JsonSyntaxError {}
 
-impl From<SyntaxError> for io::Error {
+impl From<JsonSyntaxError> for io::Error {
     #[inline]
-    fn from(error: SyntaxError) -> Self {
+    fn from(error: JsonSyntaxError) -> Self {
         io::Error::new(io::ErrorKind::InvalidData, error)
     }
 }
 
 /// A parsing error.
 ///
-/// It is the union of [`SyntaxError`] and [`std::io::Error`].
+/// It is the union of [`JsonSyntaxError`] and [`std::io::Error`].
 #[derive(Debug)]
-pub enum ParseError {
+pub enum JsonParseError {
     /// I/O error during parsing (file not found...).
     Io(io::Error),
     /// An error in the file syntax.
-    Syntax(SyntaxError),
+    Syntax(JsonSyntaxError),
 }
 
-impl fmt::Display for ParseError {
+impl fmt::Display for JsonParseError {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1200,7 +1245,7 @@ impl fmt::Display for ParseError {
     }
 }
 
-impl Error for ParseError {
+impl Error for JsonParseError {
     #[inline]
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(match self {
@@ -1210,26 +1255,26 @@ impl Error for ParseError {
     }
 }
 
-impl From<SyntaxError> for ParseError {
+impl From<JsonSyntaxError> for JsonParseError {
     #[inline]
-    fn from(error: SyntaxError) -> Self {
+    fn from(error: JsonSyntaxError) -> Self {
         Self::Syntax(error)
     }
 }
 
-impl From<io::Error> for ParseError {
+impl From<io::Error> for JsonParseError {
     #[inline]
     fn from(error: io::Error) -> Self {
         Self::Io(error)
     }
 }
 
-impl From<ParseError> for io::Error {
+impl From<JsonParseError> for io::Error {
     #[inline]
-    fn from(error: ParseError) -> Self {
+    fn from(error: JsonParseError) -> Self {
         match error {
-            ParseError::Syntax(e) => e.into(),
-            ParseError::Io(e) => e,
+            JsonParseError::Syntax(e) => e.into(),
+            JsonParseError::Io(e) => e,
         }
     }
 }

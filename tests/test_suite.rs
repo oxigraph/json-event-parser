@@ -1,4 +1,4 @@
-use json_event_parser::{FromBufferJsonReader, FromReadJsonReader, JsonEvent, ToWriteJsonWriter};
+use json_event_parser::{JsonEvent, ReaderJsonParser, SliceJsonParser, WriterJsonSerializer};
 use std::fs::{read_dir, File};
 use std::io::{Read, Result};
 use std::{fs, str};
@@ -93,10 +93,10 @@ fn test_testsuite_parsing() -> Result<()> {
 }
 
 fn parse_buffer_result(read: &[u8]) -> Result<Vec<u8>> {
-    let mut reader = FromBufferJsonReader::new(read);
-    let mut writer = ToWriteJsonWriter::new(Vec::new());
+    let mut reader = SliceJsonParser::new(read);
+    let mut writer = WriterJsonSerializer::new(Vec::new());
     loop {
-        match reader.read_next_event()? {
+        match reader.parse_next()? {
             JsonEvent::Eof => return writer.finish(),
             e => writer.write_event(e)?,
         }
@@ -104,10 +104,10 @@ fn parse_buffer_result(read: &[u8]) -> Result<Vec<u8>> {
 }
 
 fn parse_read_result(read: impl Read) -> Result<Vec<u8>> {
-    let mut reader = FromReadJsonReader::new(read);
-    let mut writer = ToWriteJsonWriter::new(Vec::new());
+    let mut reader = ReaderJsonParser::new(read);
+    let mut writer = WriterJsonSerializer::new(Vec::new());
     loop {
-        match reader.read_next_event()? {
+        match reader.parse_next()? {
             JsonEvent::Eof => return writer.finish(),
             e => writer.write_event(e)?,
         }
