@@ -9,10 +9,10 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 /// use json_event_parser::{JsonEvent, WriterJsonSerializer};
 ///
 /// let mut writer = WriterJsonSerializer::new(Vec::new());
-/// writer.write_event(JsonEvent::StartObject)?;
-/// writer.write_event(JsonEvent::ObjectKey("foo".into()))?;
-/// writer.write_event(JsonEvent::Number("1".into()))?;
-/// writer.write_event(JsonEvent::EndObject)?;
+/// writer.serialize_event(JsonEvent::StartObject)?;
+/// writer.serialize_event(JsonEvent::ObjectKey("foo".into()))?;
+/// writer.serialize_event(JsonEvent::Number("1".into()))?;
+/// writer.serialize_event(JsonEvent::EndObject)?;
 ///
 /// assert_eq!(writer.finish()?.as_slice(), b"{\"foo\":1}");
 /// # std::io::Result::Ok(())
@@ -30,8 +30,13 @@ impl<W: Write> WriterJsonSerializer<W> {
         }
     }
 
+    pub fn serialize_event(&mut self, event: JsonEvent<'_>) -> Result<()> {
+        self.writer.serialize_event(event, &mut self.write)
+    }
+
+    #[deprecated(note = "Use serialize_event() instead")]
     pub fn write_event(&mut self, event: JsonEvent<'_>) -> Result<()> {
-        self.writer.write_event(event, &mut self.write)
+        self.serialize_event(event)
     }
 
     pub fn finish(self) -> Result<W> {
@@ -48,12 +53,14 @@ impl<W: Write> WriterJsonSerializer<W> {
 /// # #[tokio::main(flavor = "current_thread")]
 /// # async fn main() -> ::std::io::Result<()> {
 /// let mut writer = TokioAsyncWriterJsonSerializer::new(Vec::new());
-/// writer.write_event(JsonEvent::StartObject).await?;
+/// writer.serialize_event(JsonEvent::StartObject).await?;
 /// writer
-///     .write_event(JsonEvent::ObjectKey("foo".into()))
+///     .serialize_event(JsonEvent::ObjectKey("foo".into()))
 ///     .await?;
-/// writer.write_event(JsonEvent::Number("1".into())).await?;
-/// writer.write_event(JsonEvent::EndObject).await?;
+/// writer
+///     .serialize_event(JsonEvent::Number("1".into()))
+///     .await?;
+/// writer.serialize_event(JsonEvent::EndObject).await?;
 /// assert_eq!(writer.finish()?.as_slice(), b"{\"foo\":1}");
 /// # Ok(())
 /// # }
@@ -75,11 +82,16 @@ impl<W: AsyncWrite + Unpin> TokioAsyncWriterJsonSerializer<W> {
         }
     }
 
-    pub async fn write_event(&mut self, event: JsonEvent<'_>) -> Result<()> {
-        self.writer.write_event(event, &mut self.buffer)?;
+    pub async fn serialize_event(&mut self, event: JsonEvent<'_>) -> Result<()> {
+        self.writer.serialize_event(event, &mut self.buffer)?;
         self.write.write_all(&self.buffer).await?;
         self.buffer.clear();
         Ok(())
+    }
+
+    #[deprecated(note = "Use serialize_event() instead")]
+    pub fn write_event(&mut self, event: JsonEvent<'_>) -> Result<()> {
+        self.serialize_event(event)
     }
 
     pub fn finish(self) -> Result<W> {
@@ -97,10 +109,10 @@ impl<W: AsyncWrite + Unpin> TokioAsyncWriterJsonSerializer<W> {
 ///
 /// let mut writer = LowLevelJsonSerializer::new();
 /// let mut output = Vec::new();
-/// writer.write_event(JsonEvent::StartObject, &mut output)?;
-/// writer.write_event(JsonEvent::ObjectKey("foo".into()), &mut output)?;
-/// writer.write_event(JsonEvent::Number("1".into()), &mut output)?;
-/// writer.write_event(JsonEvent::EndObject, &mut output)?;
+/// writer.serialize_event(JsonEvent::StartObject, &mut output)?;
+/// writer.serialize_event(JsonEvent::ObjectKey("foo".into()), &mut output)?;
+/// writer.serialize_event(JsonEvent::Number("1".into()), &mut output)?;
+/// writer.serialize_event(JsonEvent::EndObject, &mut output)?;
 ///
 /// assert_eq!(output.as_slice(), b"{\"foo\":1}");
 /// # std::io::Result::Ok(())
@@ -120,7 +132,7 @@ impl LowLevelJsonSerializer {
         }
     }
 
-    pub fn write_event(&mut self, event: JsonEvent<'_>, mut write: impl Write) -> Result<()> {
+    pub fn serialize_event(&mut self, event: JsonEvent<'_>, mut write: impl Write) -> Result<()> {
         match event {
             JsonEvent::String(s) => {
                 self.before_value(&mut write)?;
@@ -201,6 +213,11 @@ impl LowLevelJsonSerializer {
                 "EOF is not allowed in JSON writer",
             )),
         }
+    }
+
+    #[deprecated(note = "Use serialize_event() instead")]
+    pub fn write_event(&mut self, event: JsonEvent<'_>, write: impl Write) -> Result<()> {
+        self.serialize_event(event, write)
     }
 
     fn before_value(&mut self, mut write: impl Write) -> Result<()> {
