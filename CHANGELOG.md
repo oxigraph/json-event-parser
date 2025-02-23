@@ -1,10 +1,28 @@
+## [0.2.1] - 2025-02-23
+
+### Changed
+
+* Some renaming to get a cleaner API (aliases with the old names are kept):
+    - `FromTokioAsyncReadJsonReader` -> `TokioAsyncReaderJsonParser`
+    - `FromBufferJsonReader` -> `SliceJsonParser`
+    - `FromReadJsonReader` -> `ReaderJsonParser`
+    - `LowLevelJsonReader` -> `LowLevelJsonParser`
+    - `LowLevelJsonReaderResult` -> `LowLevelJsonParserResult`
+    - `ParseError` -> `JsonParseError`
+    - `SyntaxError` -> `JsonSyntaxError`
+    - `ToTokioAsyncWriteJsonWriter` -> `TokioAsyncWriterJsonSerializer`
+    - `ToWriteJsonWriter` -> `WriterJsonSerializer<W>`
+    - `LowLevelJsonWriter` -> `LowLevelJsonSerializer`
+    - `read_next_event` -> `parse_next`
+    - `write_event` -> `serialize_event`
+
 ## [0.2.0] - 2024-02-23
 
 No change compared to the alpha releases.
 
 ## [0.2.0-alpha.2] - 2023-11-13
 
-## Changed
+### Changed
 
 - Improves error messages.
 - Improves ordering of tokens and errors when errors are present.
@@ -17,7 +35,7 @@ No change compared to the alpha releases.
 - Support of UTF-8 byte-order-mark (BOM) during parsing.
 - Support of Tokio `AsyncRead` and `AsyncWrite` interfaces behind the `async-tokio` feature.
 
-## Changed
+### Changed
 
 - The parser API has been rewritten. The new entry points are `FromBufferJsonReader`, `FromReadJsonReader`,
   and `LowLevelJsonReader`.

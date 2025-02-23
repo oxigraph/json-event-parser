@@ -90,8 +90,8 @@ impl<W: AsyncWrite + Unpin> TokioAsyncWriterJsonSerializer<W> {
     }
 
     #[deprecated(note = "Use serialize_event() instead")]
-    pub fn write_event(&mut self, event: JsonEvent<'_>) -> Result<()> {
-        self.serialize_event(event)
+    pub async fn write_event(&mut self, event: JsonEvent<'_>) -> Result<()> {
+        self.serialize_event(event).await
     }
 
     pub fn finish(self) -> Result<W> {
