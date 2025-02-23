@@ -67,7 +67,7 @@ fn test_testsuite_parsing() -> Result<()> {
                             assert_eq!(
                                 serialization_str,
                                 other_serialization_str,
-                                "Roundtrip {other_serialization_str} serialization of {serialization_str} is not identical (test {file_name})", 
+                                "Roundtrip {other_serialization_str} serialization of {serialization_str} is not identical (test {file_name})",
                             )
                         }
                         Err(error) => {
@@ -98,7 +98,7 @@ fn parse_buffer_result(read: &[u8]) -> Result<Vec<u8>> {
     loop {
         match reader.parse_next()? {
             JsonEvent::Eof => return writer.finish(),
-            e => writer.write_event(e)?,
+            e => writer.serialize_event(e)?,
         }
     }
 }
@@ -109,7 +109,7 @@ fn parse_read_result(read: impl Read) -> Result<Vec<u8>> {
     loop {
         match reader.parse_next()? {
             JsonEvent::Eof => return writer.finish(),
-            e => writer.write_event(e)?,
+            e => writer.serialize_event(e)?,
         }
     }
 }

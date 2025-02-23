@@ -1,21 +1,21 @@
 #![no_main]
 
 use json_event_parser::{
-    JsonEvent, LowLevelJsonReader, LowLevelJsonReaderResult, SyntaxError, ToWriteJsonWriter,
+    JsonEvent, JsonSyntaxError, LowLevelJsonParser, LowLevelJsonParserResult, WriterJsonSerializer,
 };
 use libfuzzer_sys::fuzz_target;
 
-fn parse_chunks(chunks: &[&[u8]]) -> (String, Option<SyntaxError>) {
+fn parse_chunks(chunks: &[&[u8]]) -> (String, Option<JsonSyntaxError>) {
     let mut input_buffer = Vec::new();
     let mut input_cursor = 0;
     let mut output_buffer = Vec::new();
-    let mut reader = LowLevelJsonReader::new();
-    let mut writer = ToWriteJsonWriter::new(&mut output_buffer);
+    let mut reader = LowLevelJsonParser::new();
+    let mut writer = WriterJsonSerializer::new(&mut output_buffer);
     let mut error = None;
     for (i, chunk) in chunks.iter().enumerate() {
         input_buffer.extend_from_slice(chunk);
         loop {
-            let LowLevelJsonReaderResult {
+            let LowLevelJsonParserResult {
                 event,
                 consumed_bytes,
             } = reader.parse_next(&input_buffer[input_cursor..], i == chunks.len() - 1);
@@ -29,9 +29,9 @@ fn parse_chunks(chunks: &[&[u8]]) -> (String, Option<SyntaxError>) {
                 }
                 Some(Ok(event)) => {
                     if error.is_none() {
-                        writer.write_event(event).unwrap();
+                        writer.serialize_event(event).unwrap();
                     } else {
-                        let _ = writer.write_event(event); // We don't know if we write ok structure
+                        let _ = writer.serialize_event(event); // We don't know if we write ok structure
                     }
                 }
                 Some(Err(e)) => {

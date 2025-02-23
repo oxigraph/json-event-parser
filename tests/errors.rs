@@ -19,7 +19,7 @@ fn test_recovery() {
         loop {
             match reader.parse_next() {
                 Ok(JsonEvent::Eof) => break,
-                Ok(event) => writer.write_event(event).unwrap(),
+                Ok(event) => writer.serialize_event(event).unwrap(),
                 Err(_) => (),
             }
         }
