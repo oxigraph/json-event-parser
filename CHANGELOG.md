@@ -1,3 +1,9 @@
+## [0.2.1] - 2025-03-08
+
+### Changed
+
+* More lenient lifetime bound in `SliceJsonParser::parse_next`
+
 ## [0.2.1] - 2025-02-23
 
 ### Changed
