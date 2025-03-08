@@ -254,7 +254,7 @@ impl<'a> SliceJsonParser<'a> {
         }
     }
 
-    pub fn parse_next(&mut self) -> Result<JsonEvent<'_>, JsonSyntaxError> {
+    pub fn parse_next(&mut self) -> Result<JsonEvent<'a>, JsonSyntaxError> {
         loop {
             let LowLevelJsonParserResult {
                 event,
