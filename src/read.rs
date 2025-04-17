@@ -114,6 +114,117 @@ impl<R: Read> ReaderJsonParser<R> {
     pub fn read_next_event(&mut self) -> Result<JsonEvent<'_>, JsonParseError> {
         self.parse_next()
     }
+
+
+
+  /// Drains and returns the raw JSON string corresponding to the next full value (object, array, or scalar)
+  /// after the last emitted ObjectKey (or current position).
+  pub fn drain_next_value_as_string(&mut self) -> Result<String, JsonParseError> {
+    let mut nesting = 0;
+    let mut found_start = false;
+
+    let mut offset = self.input_buffer_start;
+    let mut cursor = self.input_buffer_start;
+
+    loop {
+      // SAFETY: shadow parsing avoids borrow checker issues
+      let LowLevelJsonParserResult {
+        event,
+        consumed_bytes,
+      } = self.parser.parse_next(
+        #[allow(unsafe_code)]
+        unsafe {
+          let input_buffer_ptr: *const [u8] =
+            &self.input_buffer[offset..self.input_buffer_end];
+          &*input_buffer_ptr
+        },
+        self.is_ending,
+      );
+
+      if consumed_bytes == 0 && self.is_ending {
+        return Err(io::Error::new(
+          io::ErrorKind::UnexpectedEof,
+          "Unexpected EOF while draining value",
+        )
+          .into());
+      }
+
+      if let Some(event) = event {
+        let event = event?;
+
+        match event {
+          JsonEvent::StartObject | JsonEvent::StartArray => {
+            if !found_start {
+              // Skip colon and whitespace before value
+              let mut scan = offset;
+              while scan < self.input_buffer_end {
+                let b = self.input_buffer[scan];
+                if b == b':' || b.is_ascii_whitespace() {
+                  scan += 1;
+                } else {
+                  break;
+                }
+              }
+              cursor = scan;
+              found_start = true;
+            }
+            nesting += 1;
+          }
+          JsonEvent::EndObject | JsonEvent::EndArray => {
+            nesting -= 1;
+            if nesting == 0 {
+              let end = offset + consumed_bytes;
+              // self.parser = shadow_parser;
+              self.input_buffer_start = end;
+              return Ok(str::from_utf8(&self.input_buffer[cursor..end])
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+                .to_string());
+            }
+          }
+          JsonEvent::Eof => {
+            return Err(io::Error::new(
+              io::ErrorKind::UnexpectedEof,
+              "Unexpected EOF while draining value",
+            )
+              .into());
+          }
+          _ => {
+            if !found_start {
+              // scalar case
+              cursor = offset;
+              found_start = true;
+            }
+            if nesting == 0 {
+              let end = offset + consumed_bytes;
+              self.input_buffer_start = end;
+              return Ok(str::from_utf8(&self.input_buffer[cursor..end])
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+                .to_string());
+            }
+          }
+        }
+      }
+
+      offset += consumed_bytes;
+
+      if offset >= self.input_buffer_end {
+        // shift + refill
+        let remaining = self.input_buffer_end - self.input_buffer_start;
+        self.input_buffer.copy_within(self.input_buffer_start..self.input_buffer_end, 0);
+        self.input_buffer_start = 0;
+        self.input_buffer_end = remaining;
+        offset = self.input_buffer_end;
+
+        if self.input_buffer.len() < self.max_buffer_size {
+          self.input_buffer.resize(self.input_buffer.len() + MIN_BUFFER_SIZE, 0);
+        }
+
+        let read = self.read.read(&mut self.input_buffer[self.input_buffer_end..])?;
+        self.input_buffer_end += read;
+        self.is_ending = read == 0;
+      }
+    }
+  }
 }
 
 /// Parses a JSON file from an [`AsyncRead`] implementation.
