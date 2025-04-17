@@ -192,6 +192,9 @@ impl LowLevelJsonSerializer {
                     "Closing a not opened object",
                 )),
             },
+            JsonEvent::ArrayIndex => {
+              Ok(())
+            },
             JsonEvent::ObjectKey(key) => {
                 match self.state_stack.pop() {
                     Some(JsonState::OpenObject) => (),

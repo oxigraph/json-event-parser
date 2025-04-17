@@ -501,10 +501,15 @@ impl LowLevelJsonParser {
                 if token == JsonToken::ClosingSquareBracket {
                     return (Some(JsonEvent::EndArray), Some("Trailing commas are not allowed".into()));
                 }
+
                 if let Err(e) = self.push_state_stack(JsonState::ArrayCommaOrEnd) {
                     return (None, Some(e));
                 }
+
                 self.apply_new_token_for_value(token)
+            }
+            Some(JsonState::ArrayIndex) => {
+              (Some(JsonEvent::ArrayIndex), None)
             }
             Some(JsonState::ArrayCommaOrEnd) => match token {
                 JsonToken::Comma => {
@@ -512,6 +517,10 @@ impl LowLevelJsonParser {
                 }
                 JsonToken::ClosingSquareBracket => (Some(JsonEvent::EndArray), None),
                 _ => {
+                    if let Err(e) = self.push_state_stack(JsonState::ArrayIndex) {
+                      return (None, Some(e));
+                    }
+
                     let _ = self.push_state_stack(JsonState::ArrayValue); // We already have an error
                     let (event, _) = self.apply_new_token(token);
                     (event, Some("Array values must be followed by a comma to add a new value or a squared bracket to end the array".into()))
@@ -596,6 +605,7 @@ enum JsonState {
     ObjectColon,
     ObjectValue,
     ObjectCommaOrEnd,
+    ArrayIndex,
     ArrayValue,
     ArrayValueOrEnd,
     ArrayCommaOrEnd,
@@ -1132,6 +1142,7 @@ fn owned_event(event: JsonEvent<'_>) -> JsonEvent<'static> {
         JsonEvent::Number(n) => JsonEvent::Number(n.into_owned().into()),
         JsonEvent::Boolean(b) => JsonEvent::Boolean(b),
         JsonEvent::Null => JsonEvent::Null,
+        JsonEvent::ArrayIndex => JsonEvent::ArrayIndex,
         JsonEvent::StartArray => JsonEvent::StartArray,
         JsonEvent::EndArray => JsonEvent::EndArray,
         JsonEvent::StartObject => JsonEvent::StartObject,

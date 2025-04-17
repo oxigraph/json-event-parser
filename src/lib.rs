@@ -34,6 +34,7 @@ pub enum JsonEvent<'a> {
     Null,
     StartArray,
     EndArray,
+    ArrayIndex,
     StartObject,
     EndObject,
     ObjectKey(Cow<'a, str>),
