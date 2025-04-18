@@ -2,40 +2,40 @@ use json_event_parser::{JsonEvent, SliceJsonParser, WriterJsonSerializer};
 
 #[test]
 fn test_recovery() {
-    let entries = [
-        (b"[nonono]".as_slice(), "[]"),
-        (b"[a]", "[]"),
-        (b"[1,]", "[1]"),
-        (b"{\"foo\":1,}", "{\"foo\":1}"),
-        (b"{\"foo\" 1}", "{\"foo\":1}"),
-        (b"[1 2]", "[1,2]"),
-        (b"[\"\x00\"]", "[]"),
-        (b"[\"\\uD888\\u1234\"]", "[]"),
-    ];
+  let entries = [
+    (b"[nonono]".as_slice(), "[]"),
+    (b"[a]", "[]"),
+    (b"[1,]", "[1]"),
+    (b"{\"foo\":1,}", "{\"foo\":1}"),
+    (b"{\"foo\" 1}", "{\"foo\":1}"),
+    (b"[1 2]", "[1,2]"),
+    (b"[\"\x00\"]", "[]"),
+    (b"[\"\\uD888\\u1234\"]", "[]"),
+  ];
 
-    for (input, expected_output) in entries {
-        let mut reader = SliceJsonParser::new(input);
-        let mut writer = WriterJsonSerializer::new(Vec::new());
-        loop {
-            match reader.parse_next() {
-                Ok(JsonEvent::Eof) => break,
-                Ok(event) => writer.serialize_event(event).unwrap(),
-                Err(_) => (),
-            }
-        }
-        let actual_output = String::from_utf8(writer.finish().unwrap()).unwrap();
-        assert_eq!(
-            expected_output,
-            actual_output,
-            "on {}",
-            String::from_utf8_lossy(input)
-        );
+  for (input, expected_output) in entries {
+    let mut reader = SliceJsonParser::new(input);
+    let mut writer = WriterJsonSerializer::new(Vec::new());
+    loop {
+      match reader.parse_next() {
+        Ok(JsonEvent::Eof) => break,
+        Ok(event) => writer.serialize_event(event).unwrap(),
+        Err(_) => (),
+      }
     }
+    let actual_output = String::from_utf8(writer.finish().unwrap()).unwrap();
+    assert_eq!(
+      expected_output,
+      actual_output,
+      "on {}",
+      String::from_utf8_lossy(input)
+    );
+  }
 }
 
 #[test]
 fn test_error_messages() {
-    let entries = [
+  let entries = [
         (
             b"".as_slice(),
             "Parser error at line 1 column 1: Unexpected end of file, a value was expected",
@@ -57,13 +57,13 @@ fn test_error_messages() {
             "Parser error at line 1 between columns 2 and column 8: \\uDCFF is not a valid high surrogate",
         )
     ];
-    for (json, error) in entries {
-        assert_eq!(
-            SliceJsonParser::new(json)
-                .parse_next()
-                .unwrap_err()
-                .to_string(),
-            error
-        );
-    }
+  for (json, error) in entries {
+    assert_eq!(
+      SliceJsonParser::new(json)
+        .parse_next()
+        .unwrap_err()
+        .to_string(),
+      error
+    );
+  }
 }

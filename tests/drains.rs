@@ -19,7 +19,6 @@ mod tests {
     let mut parser = ReaderJsonParser::new(&json[..]);
 
     while let Ok(event) = parser.parse_next() {
-
       match event {
         JsonEvent::ObjectKey(key) => {
           println!("KEY: {:?}", key);
