@@ -145,7 +145,13 @@ impl<R: Read> ReaderJsonParser<R> {
       );
 
       if consumed_bytes == 0 && self.is_ending {
-        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Unexpected EOF while draining value").into());
+        return Err(
+          io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "Unexpected EOF while draining value",
+          )
+          .into(),
+        );
       }
 
       if let Some(event) = event {
@@ -174,13 +180,21 @@ impl<R: Read> ReaderJsonParser<R> {
             if nesting == 0 {
               let end = offset + consumed_bytes;
               self.input_buffer_start = end;
-              return Ok(str::from_utf8(&self.input_buffer[cursor..end])
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
-                .to_string());
+              return Ok(
+                str::from_utf8(&self.input_buffer[cursor..end])
+                  .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+                  .to_string(),
+              );
             }
           }
           JsonEvent::Eof => {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Unexpected EOF while draining value").into());
+            return Err(
+              io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Unexpected EOF while draining value",
+              )
+              .into(),
+            );
           }
           _ => {
             if !found_start {
@@ -190,9 +204,11 @@ impl<R: Read> ReaderJsonParser<R> {
             if nesting == 0 {
               let end = offset + consumed_bytes;
               self.input_buffer_start = end;
-              return Ok(str::from_utf8(&self.input_buffer[cursor..end])
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
-                .to_string());
+              return Ok(
+                str::from_utf8(&self.input_buffer[cursor..end])
+                  .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+                  .to_string(),
+              );
             }
           }
         }
@@ -203,7 +219,9 @@ impl<R: Read> ReaderJsonParser<R> {
       if offset >= self.input_buffer_end {
         // shift + refill
         let shift = self.input_buffer_start;
-        self.input_buffer.copy_within(shift..self.input_buffer_end, 0);
+        self
+          .input_buffer
+          .copy_within(shift..self.input_buffer_end, 0);
         self.input_buffer_end -= shift;
         self.input_buffer_start = 0;
 
@@ -212,10 +230,14 @@ impl<R: Read> ReaderJsonParser<R> {
         cursor -= shift;
 
         if self.input_buffer.len() < self.max_buffer_size {
-          self.input_buffer.resize(self.input_buffer.len() + MIN_BUFFER_SIZE, 0);
+          self
+            .input_buffer
+            .resize(self.input_buffer.len() + MIN_BUFFER_SIZE, 0);
         }
 
-        let read = self.read.read(&mut self.input_buffer[self.input_buffer_end..])?;
+        let read = self
+          .read
+          .read(&mut self.input_buffer[self.input_buffer_end..])?;
         self.input_buffer_end += read;
         self.is_ending = read == 0;
       }
