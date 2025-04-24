@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-  use super::*;
+
   use json_event_parser::{JsonEvent, ReaderJsonParser};
 
   #[test]
