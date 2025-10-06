@@ -22,7 +22,7 @@ async-tokio = ["dep:tokio"]
 tokio = { version = "1.29", optional = true, features = ["io-util"] }
 
 [dev-dependencies]
-codspeed-criterion-compat = "3.0.2"
+codspeed-criterion-compat = "4.0.1"
 tokio = { version = "1.29", features = ["rt", "macros"] }
 clap = "4"
 
