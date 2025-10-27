@@ -122,7 +122,7 @@ jobs:
         if: steps.cache-corpus.outputs.cache-hit != 'true'
       - run: cargo fuzz run ${{ matrix.target }} --sanitizer none -- -max_total_time=200
       - run: cargo fuzz cmin ${{ matrix.target }} --sanitizer none
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: failure()
         with:
           name: fuzz-artifacts-${{ matrix.target }}
