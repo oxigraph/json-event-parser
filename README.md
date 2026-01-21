@@ -7,7 +7,7 @@ JSON streaming parser and serializer
 
 JSON event parser is a simple streaming JSON parser and serializer implementation in Rust.
 
-It does not aims to be the fastest JSON parser possible but to be a simple implementation allowing to parse larger than
+It does not aim to be the fastest JSON parser possible but to be a simple implementation allowing to parse larger than
 memory files.
 
 If you want fast and battle-tested code you might prefer to
