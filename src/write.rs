@@ -289,8 +289,8 @@ fn write_escaped_json_string(s: &str, mut write: impl Write) -> Result<()> {
             c => {
                 if c < char::from(32) {
                     match c {
-                        '\u{08}' => write.write_all(b"\\b"),
-                        '\u{0C}' => write.write_all(b"\\f"),
+                        '\x08' => write.write_all(b"\\b"),
+                        '\x0C' => write.write_all(b"\\f"),
                         '\n' => write.write_all(b"\\n"),
                         '\r' => write.write_all(b"\\r"),
                         '\t' => write.write_all(b"\\t"),
@@ -298,7 +298,7 @@ fn write_escaped_json_string(s: &str, mut write: impl Write) -> Result<()> {
                             let mut c = c as u8;
                             for i in (2..6).rev() {
                                 let ch = c % 16;
-                                buffer[i] = if ch < 10 { b'0' + ch } else { b'A' + ch - 10 };
+                                buffer[i] = if ch < 10 { b'0' + ch } else { b'a' + ch - 10 };
                                 c /= 16;
                             }
                             write.write_all(&buffer)
@@ -312,4 +312,34 @@ fn write_escaped_json_string(s: &str, mut write: impl Write) -> Result<()> {
     }
     write.write_all(b"\"")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn basic_serialization() -> Result<()> {
+        let events = [
+            JsonEvent::StartArray,
+            JsonEvent::StartObject,
+            JsonEvent::ObjectKey("f\to".into()),
+            JsonEvent::String("\0\x08\x0c\n\r\t\"\\".into()),
+            JsonEvent::EndObject,
+            JsonEvent::Number("112".into()),
+            JsonEvent::Boolean(true),
+            JsonEvent::Boolean(false),
+            JsonEvent::Null,
+            JsonEvent::EndArray,
+        ];
+        let mut serializer = WriterJsonSerializer::new(Vec::new());
+        for event in events {
+            serializer.serialize_event(event)?;
+        }
+        assert_eq!(
+            serializer.finish()?,
+            br#"[{"f\to":"\u0000\b\f\n\r\t\"\\"},112,true,false,null]"#
+        );
+        Ok(())
+    }
 }
