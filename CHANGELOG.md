@@ -1,4 +1,11 @@
-## [0.2.1] - 2025-03-08
+## [0.2.3] - 2026-02-06
+
+### Changed
+
+* Bump MSRV to 1.74
+* Use lower case escape sequences in strings serialization to be closer to the JSON Canonicalization Scheme
+
+## [0.2.2] - 2025-03-08
 
 ### Changed
 
