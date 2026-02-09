@@ -109,11 +109,6 @@ impl<R: Read> ReaderJsonParser<R> {
             self.is_ending = read == 0;
         }
     }
-
-    #[deprecated(note = "Use parse_next() instead")]
-    pub fn read_next_event(&mut self) -> Result<JsonEvent<'_>, JsonParseError> {
-        self.parse_next()
-    }
 }
 
 /// Parses a JSON file from an [`AsyncRead`] implementation.
@@ -221,11 +216,6 @@ impl<R: AsyncRead + Unpin> TokioAsyncReaderJsonParser<R> {
             self.is_ending = read == 0;
         }
     }
-
-    #[deprecated(note = "Use parse_next() instead")]
-    pub async fn read_next_event(&mut self) -> Result<JsonEvent<'_>, JsonParseError> {
-        self.parse_next().await
-    }
 }
 
 /// Parses a JSON file from a `&[u8]`.
@@ -265,11 +255,6 @@ impl<'a> SliceJsonParser<'a> {
                 return event;
             }
         }
-    }
-
-    #[deprecated(note = "Use parse_next() instead")]
-    pub fn read_next_event(&mut self) -> Result<JsonEvent<'_>, JsonSyntaxError> {
-        self.parse_next()
     }
 }
 
@@ -425,15 +410,6 @@ impl LowLevelJsonParser {
                 None
             },
         }
-    }
-
-    #[deprecated(note = "Use parse_next() instead")]
-    pub fn read_next_event<'a>(
-        &mut self,
-        input_buffer: &'a [u8],
-        is_ending: bool,
-    ) -> LowLevelJsonParserResult<'a> {
-        self.parse_next(input_buffer, is_ending)
     }
 
     fn apply_new_token<'a>(
