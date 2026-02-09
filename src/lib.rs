@@ -39,26 +39,3 @@ pub enum JsonEvent<'a> {
     ObjectKey(Cow<'a, str>),
     Eof,
 }
-
-#[cfg(feature = "async-tokio")]
-#[deprecated(note = "Use TokioAsyncReaderJsonParser")]
-pub type FromTokioAsyncReadJsonReader<R> = TokioAsyncReaderJsonParser<R>;
-#[deprecated(note = "Use SliceJsonParser")]
-pub type FromBufferJsonReader<'a> = SliceJsonParser<'a>;
-#[deprecated(note = "Use ReaderJsonParser")]
-pub type FromReadJsonReader<R> = ReaderJsonParser<R>;
-#[deprecated(note = "Use LowLevelJsonParser")]
-pub type LowLevelJsonReader = LowLevelJsonParser;
-#[deprecated(note = "Use LowLevelJsonParserResult")]
-pub type LowLevelJsonReaderResult<'a> = LowLevelJsonParserResult<'a>;
-#[deprecated(note = "Use JsonParseError")]
-pub type ParseError = JsonParseError;
-#[deprecated(note = "Use JsonSyntaxError")]
-pub type SyntaxError = JsonSyntaxError;
-#[cfg(feature = "async-tokio")]
-#[deprecated(note = "Use TokioAsyncWriterJsonSerializer")]
-pub type ToTokioAsyncWriteJsonWriter<W> = TokioAsyncWriterJsonSerializer<W>;
-#[deprecated(note = "Use WriterJsonSerializer")]
-pub type ToWriteJsonWriter<W> = WriterJsonSerializer<W>;
-#[deprecated(note = "Use LowLevelJsonSerializer")]
-pub type LowLevelJsonWriter = LowLevelJsonSerializer;
