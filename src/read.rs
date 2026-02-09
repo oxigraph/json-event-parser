@@ -17,13 +17,26 @@ const MAX_BUFFER_SIZE: usize = 4096 * 4096;
 ///
 /// ```
 /// use json_event_parser::{JsonEvent, ReaderJsonParser};
+/// use std::borrow::Cow;
 ///
 /// let mut reader = ReaderJsonParser::new(b"{\"foo\": 1}".as_slice());
-/// assert_eq!(reader.parse_next()?, JsonEvent::StartObject);
-/// assert_eq!(reader.parse_next()?, JsonEvent::ObjectKey("foo".into()));
-/// assert_eq!(reader.parse_next()?, JsonEvent::Number("1".into()));
-/// assert_eq!(reader.parse_next()?, JsonEvent::EndObject);
-/// assert_eq!(reader.parse_next()?, JsonEvent::Eof);
+/// assert!(matches!(
+///     reader.parse_next(),
+///     Some(Ok(JsonEvent::StartObject))
+/// ));
+/// assert!(matches!(
+///     reader.parse_next(),
+///     Some(Ok(JsonEvent::ObjectKey(Cow::Borrowed("foo"))))
+/// ));
+/// assert!(matches!(
+///     reader.parse_next(),
+///     Some(Ok(JsonEvent::Number(Cow::Borrowed("1"))))
+/// ));
+/// assert!(matches!(
+///     reader.parse_next(),
+///     Some(Ok(JsonEvent::EndObject))
+/// ));
+/// assert!(matches!(reader.parse_next(), None));
 /// # std::io::Result::Ok(())
 /// ```
 pub struct ReaderJsonParser<R: Read> {
@@ -55,7 +68,7 @@ impl<R: Read> ReaderJsonParser<R> {
         self
     }
 
-    pub fn parse_next(&mut self) -> Result<JsonEvent<'_>, JsonParseError> {
+    pub fn parse_next(&mut self) -> Option<Result<JsonEvent<'_>, JsonParseError>> {
         loop {
             {
                 let LowLevelJsonParserResult {
@@ -72,7 +85,9 @@ impl<R: Read> ReaderJsonParser<R> {
                 );
                 self.input_buffer_start += consumed_bytes;
                 if let Some(event) = event {
-                    return Ok(event?);
+                    return Some(event.map_err(Into::into));
+                } else if self.is_ending {
+                    return None;
                 }
             }
             if self.input_buffer_start > 0 {
@@ -82,14 +97,14 @@ impl<R: Read> ReaderJsonParser<R> {
                 self.input_buffer_start = 0;
             }
             if self.input_buffer.len() == self.max_buffer_size {
-                return Err(io::Error::new(
+                return Some(Err(io::Error::new(
                     io::ErrorKind::OutOfMemory,
                     format!(
                         "Reached the buffer maximal size of {}",
                         self.max_buffer_size
                     ),
                 )
-                .into());
+                .into()));
             }
             let min_end = min(
                 self.input_buffer_end + MIN_BUFFER_SIZE,
@@ -102,9 +117,13 @@ impl<R: Read> ReaderJsonParser<R> {
                 // We keep extending to have as much space as available without reallocation
                 self.input_buffer.resize(self.input_buffer.capacity(), 0);
             }
-            let read = self
+            let read = match self
                 .read
-                .read(&mut self.input_buffer[self.input_buffer_end..])?;
+                .read(&mut self.input_buffer[self.input_buffer_end..])
+            {
+                Ok(read) => read,
+                Err(e) => return Some(Err(e.into())),
+            };
             self.input_buffer_end += read;
             self.is_ending = read == 0;
         }
@@ -115,18 +134,28 @@ impl<R: Read> ReaderJsonParser<R> {
 ///
 /// ```
 /// use json_event_parser::{JsonEvent, TokioAsyncReaderJsonParser};
+/// use std::borrow::Cow;
 ///
 /// # #[tokio::main(flavor = "current_thread")]
 /// # async fn main() -> ::std::io::Result<()> {
 /// let mut reader = TokioAsyncReaderJsonParser::new(b"{\"foo\": 1}".as_slice());
-/// assert_eq!(reader.parse_next().await?, JsonEvent::StartObject);
-/// assert_eq!(
-///     reader.parse_next().await?,
-///     JsonEvent::ObjectKey("foo".into())
-/// );
-/// assert_eq!(reader.parse_next().await?, JsonEvent::Number("1".into()));
-/// assert_eq!(reader.parse_next().await?, JsonEvent::EndObject);
-/// assert_eq!(reader.parse_next().await?, JsonEvent::Eof);
+/// assert!(matches!(
+///     reader.parse_next().await,
+///     Some(Ok(JsonEvent::StartObject))
+/// ));
+/// assert!(matches!(
+///     reader.parse_next().await,
+///     Some(Ok(JsonEvent::ObjectKey(Cow::Borrowed("foo"))))
+/// ));
+/// assert!(matches!(
+///     reader.parse_next().await,
+///     Some(Ok(JsonEvent::Number(Cow::Borrowed("1"))))
+/// ));
+/// assert!(matches!(
+///     reader.parse_next().await,
+///     Some(Ok(JsonEvent::EndObject))
+/// ));
+/// assert!(matches!(reader.parse_next().await, None));
 /// # Ok(())
 /// # }
 /// ```
@@ -161,7 +190,7 @@ impl<R: AsyncRead + Unpin> TokioAsyncReaderJsonParser<R> {
         self
     }
 
-    pub async fn parse_next(&mut self) -> Result<JsonEvent<'_>, JsonParseError> {
+    pub async fn parse_next(&mut self) -> Option<Result<JsonEvent<'_>, JsonParseError>> {
         loop {
             {
                 let LowLevelJsonParserResult {
@@ -178,7 +207,9 @@ impl<R: AsyncRead + Unpin> TokioAsyncReaderJsonParser<R> {
                 );
                 self.input_buffer_start += consumed_bytes;
                 if let Some(event) = event {
-                    return Ok(event?);
+                    return Some(event.map_err(Into::into));
+                } else if self.is_ending {
+                    return None;
                 }
             }
             if self.input_buffer_start > 0 {
@@ -188,14 +219,14 @@ impl<R: AsyncRead + Unpin> TokioAsyncReaderJsonParser<R> {
                 self.input_buffer_start = 0;
             }
             if self.input_buffer.len() == self.max_buffer_size {
-                return Err(io::Error::new(
+                return Some(Err(io::Error::new(
                     io::ErrorKind::OutOfMemory,
                     format!(
                         "Reached the buffer maximal size of {}",
                         self.max_buffer_size
                     ),
                 )
-                .into());
+                .into()));
             }
             let min_end = min(
                 self.input_buffer_end + MIN_BUFFER_SIZE,
@@ -208,10 +239,14 @@ impl<R: AsyncRead + Unpin> TokioAsyncReaderJsonParser<R> {
                 // We keep extending to have as much space as available without reallocation
                 self.input_buffer.resize(self.input_buffer.capacity(), 0);
             }
-            let read = self
+            let read = match self
                 .read
                 .read(&mut self.input_buffer[self.input_buffer_end..])
-                .await?;
+                .await
+            {
+                Ok(read) => read,
+                Err(e) => return Some(Err(e.into())),
+            };
             self.input_buffer_end += read;
             self.is_ending = read == 0;
         }
@@ -222,13 +257,26 @@ impl<R: AsyncRead + Unpin> TokioAsyncReaderJsonParser<R> {
 ///
 /// ```
 /// use json_event_parser::{JsonEvent, SliceJsonParser};
+/// use std::borrow::Cow;
 ///
 /// let mut reader = SliceJsonParser::new(b"{\"foo\": 1}");
-/// assert_eq!(reader.parse_next()?, JsonEvent::StartObject);
-/// assert_eq!(reader.parse_next()?, JsonEvent::ObjectKey("foo".into()));
-/// assert_eq!(reader.parse_next()?, JsonEvent::Number("1".into()));
-/// assert_eq!(reader.parse_next()?, JsonEvent::EndObject);
-/// assert_eq!(reader.parse_next()?, JsonEvent::Eof);
+/// assert!(matches!(
+///     reader.parse_next(),
+///     Some(Ok(JsonEvent::StartObject))
+/// ));
+/// assert!(matches!(
+///     reader.parse_next(),
+///     Some(Ok(JsonEvent::ObjectKey(Cow::Borrowed("foo"))))
+/// ));
+/// assert!(matches!(
+///     reader.parse_next(),
+///     Some(Ok(JsonEvent::Number(Cow::Borrowed("1"))))
+/// ));
+/// assert!(matches!(
+///     reader.parse_next(),
+///     Some(Ok(JsonEvent::EndObject))
+/// ));
+/// assert!(matches!(reader.parse_next(), None));
 /// # std::io::Result::Ok(())
 /// ```
 pub struct SliceJsonParser<'a> {
@@ -244,17 +292,13 @@ impl<'a> SliceJsonParser<'a> {
         }
     }
 
-    pub fn parse_next(&mut self) -> Result<JsonEvent<'a>, JsonSyntaxError> {
-        loop {
-            let LowLevelJsonParserResult {
-                event,
-                consumed_bytes,
-            } = self.parser.parse_next(self.input_buffer, true);
-            self.input_buffer = &self.input_buffer[consumed_bytes..];
-            if let Some(event) = event {
-                return event;
-            }
-        }
+    pub fn parse_next(&mut self) -> Option<Result<JsonEvent<'a>, JsonSyntaxError>> {
+        let LowLevelJsonParserResult {
+            event,
+            consumed_bytes,
+        } = self.parser.parse_next(self.input_buffer, true);
+        self.input_buffer = &self.input_buffer[consumed_bytes..];
+        event
     }
 }
 
@@ -262,11 +306,7 @@ impl<'a> Iterator for SliceJsonParser<'a> {
     type Item = Result<JsonEvent<'a>, JsonSyntaxError>;
 
     fn next(&mut self) -> Option<Result<JsonEvent<'a>, JsonSyntaxError>> {
-        match self.parse_next() {
-            Ok(JsonEvent::Eof) => None,
-            Ok(event) => Some(Ok(event)),
-            Err(e) => Some(Err(e)),
-        }
+        self.parse_next()
     }
 }
 
@@ -319,7 +359,7 @@ impl<'a> Iterator for SliceJsonParser<'a> {
 ///     reader.parse_next(b"".as_slice(), true),
 ///     LowLevelJsonParserResult {
 ///         consumed_bytes: 0,
-///         event: Some(Ok(JsonEvent::Eof))
+///         event: None
 ///     }
 /// ));
 /// # std::io::Result::Ok(())
@@ -329,6 +369,7 @@ pub struct LowLevelJsonParser {
     state_stack: Vec<JsonState>,
     max_state_stack_size: usize,
     element_read: bool,
+    raised_unexpected_eof: bool,
     buffered_event: Option<JsonEvent<'static>>,
 }
 
@@ -345,6 +386,7 @@ impl LowLevelJsonParser {
             state_stack: Vec::new(),
             max_state_stack_size: MAX_STATE_STACK_SIZE,
             element_read: false,
+            raised_unexpected_eof: false,
             buffered_event: None,
         }
     }
@@ -412,8 +454,14 @@ impl LowLevelJsonParser {
             consumed_bytes: (self.lexer.file_offset - start_file_offset)
                 .try_into()
                 .unwrap(),
-            event: if is_ending {
-                self.buffered_event = Some(JsonEvent::Eof);
+            event: if is_ending
+                && !self.raised_unexpected_eof
+                && (!self.element_read
+                    || !self.state_stack.is_empty()
+                    || usize::try_from(self.lexer.file_offset - start_file_offset).unwrap()
+                        < input_buffer.len())
+            {
+                self.raised_unexpected_eof = true;
                 Some(Err(self.lexer.syntax_error(
                     self.lexer.file_offset..self.lexer.file_offset + 1,
                     "Unexpected end of file",
@@ -506,11 +554,7 @@ impl LowLevelJsonParser {
                 }
             }
             None => if self.element_read {
-                if token == JsonToken::Eof {
-                    (Some(JsonEvent::Eof), None)
-                } else {
-                    (None, Some("The JSON already contains one root element".into()))
-                }
+                (None, Some("The JSON already contains one root element".into()))
             } else {
                 self.element_read = true;
                 self.apply_new_token_for_value(token)
@@ -546,10 +590,6 @@ impl LowLevelJsonParser {
             JsonToken::True => (Some(JsonEvent::Boolean(true)), None),
             JsonToken::False => (Some(JsonEvent::Boolean(false)), None),
             JsonToken::Null => (Some(JsonEvent::Null), None),
-            JsonToken::Eof => (
-                Some(JsonEvent::Eof),
-                Some("Unexpected end of file, a value was expected".into()),
-            ),
         }
     }
 
@@ -602,7 +642,6 @@ enum JsonToken<'a> {
     True,                 // true
     False,                // false
     Null,                 // null
-    Eof,                  // EOF
 }
 
 struct JsonLexer {
@@ -668,7 +707,7 @@ impl JsonLexer {
         self.file_start_of_last_token = self.file_offset;
 
         if is_ending && input_buffer.is_empty() {
-            return Some(Ok(JsonToken::Eof));
+            return None;
         }
 
         // we get the first character
@@ -1125,7 +1164,6 @@ fn owned_event(event: JsonEvent<'_>) -> JsonEvent<'static> {
         JsonEvent::StartObject => JsonEvent::StartObject,
         JsonEvent::EndObject => JsonEvent::EndObject,
         JsonEvent::ObjectKey(k) => JsonEvent::ObjectKey(k.into_owned().into()),
-        JsonEvent::Eof => JsonEvent::Eof,
     }
 }
 

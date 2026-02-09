@@ -198,10 +198,6 @@ impl LowLevelJsonSerializer {
                 write_escaped_json_string(&key, &mut write)?;
                 write.write_all(b":")
             }
-            JsonEvent::Eof => Err(Error::new(
-                ErrorKind::InvalidInput,
-                "EOF is not allowed in JSON writer",
-            )),
         }
     }
 
