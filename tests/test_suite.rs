@@ -1,4 +1,4 @@
-use json_event_parser::{JsonEvent, ReaderJsonParser, SliceJsonParser, WriterJsonSerializer};
+use json_event_parser::{ReaderJsonParser, SliceJsonParser, WriterJsonSerializer};
 use std::fs::{read_dir, File};
 use std::io::{Read, Result};
 use std::{fs, str};
@@ -93,23 +93,19 @@ fn test_testsuite_parsing() -> Result<()> {
 }
 
 fn parse_buffer_result(read: &[u8]) -> Result<Vec<u8>> {
-    let mut reader = SliceJsonParser::new(read);
+    let reader = SliceJsonParser::new(read);
     let mut writer = WriterJsonSerializer::new(Vec::new());
-    loop {
-        match reader.parse_next()? {
-            JsonEvent::Eof => return writer.finish(),
-            e => writer.serialize_event(e)?,
-        }
+    for event in reader {
+        writer.serialize_event(event?)?;
     }
+    writer.finish()
 }
 
 fn parse_read_result(read: impl Read) -> Result<Vec<u8>> {
     let mut reader = ReaderJsonParser::new(read);
     let mut writer = WriterJsonSerializer::new(Vec::new());
-    loop {
-        match reader.parse_next()? {
-            JsonEvent::Eof => return writer.finish(),
-            e => writer.serialize_event(e)?,
-        }
+    while let Some(result) = reader.parse_next() {
+        writer.serialize_event(result?)?;
     }
+    writer.finish()
 }
