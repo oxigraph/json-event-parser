@@ -298,16 +298,6 @@ impl<'a> SliceJsonParser<'a> {
             parser: LowLevelJsonParser::new(),
         }
     }
-
-    #[inline]
-    pub fn parse_next(&mut self) -> Option<Result<JsonEvent<'a>, JsonSyntaxError>> {
-        let LowLevelJsonParserResult {
-            event,
-            consumed_bytes,
-        } = self.parser.parse_next(self.input_buffer, true);
-        self.input_buffer = &self.input_buffer[consumed_bytes..];
-        event
-    }
 }
 
 impl<'a> Iterator for SliceJsonParser<'a> {
