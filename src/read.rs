@@ -258,6 +258,18 @@ impl<'a> SliceJsonParser<'a> {
     }
 }
 
+impl<'a> Iterator for SliceJsonParser<'a> {
+    type Item = Result<JsonEvent<'a>, JsonSyntaxError>;
+
+    fn next(&mut self) -> Option<Result<JsonEvent<'a>, JsonSyntaxError>> {
+        match self.parse_next() {
+            Ok(JsonEvent::Eof) => None,
+            Ok(event) => Some(Ok(event)),
+            Err(e) => Some(Err(e)),
+        }
+    }
+}
+
 /// A low-level JSON parser acting on a provided buffer.
 ///
 /// Does not allocate except a stack to check if array and object opening and closing are properly nested.
