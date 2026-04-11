@@ -10,6 +10,12 @@ on:
   schedule:
     - cron: "12 3 * * *"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
 jobs:
   fmt:
     runs-on: ubuntu-latest
@@ -85,6 +91,8 @@ jobs:
 
   codspeed:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -96,8 +104,7 @@ jobs:
       - uses: CodSpeedHQ/action@v4
         with:
           run: cargo codspeed run
-          token: ${{ secrets.CODSPEED_TOKEN }}
-          mode: instrumentation
+          mode: simulation
 
   fuzz:
     strategy:
@@ -130,10 +137,10 @@ jobs:
 
   codecov:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
     steps:
       - uses: actions/checkout@v6
-        with:
-          submodules: true
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with: { tool: cargo-llvm-cov }
@@ -142,3 +149,5 @@ jobs:
         with:
           files: codecov.json
           flags: rust
+          fail_ci_if_error: true
+          use_oidc: true
