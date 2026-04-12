@@ -1,4 +1,4 @@
-use json_event_parser::{JsonEvent, SliceJsonParser, WriterJsonSerializer};
+use json_event_parser::{SliceJsonParser, WriterJsonSerializer};
 
 #[test]
 fn test_recovery() {
@@ -14,14 +14,10 @@ fn test_recovery() {
     ];
 
     for (input, expected_output) in entries {
-        let mut reader = SliceJsonParser::new(input);
+        let reader = SliceJsonParser::new(input);
         let mut writer = WriterJsonSerializer::new(Vec::new());
-        loop {
-            match reader.parse_next() {
-                Ok(JsonEvent::Eof) => break,
-                Ok(event) => writer.serialize_event(event).unwrap(),
-                Err(_) => (),
-            }
+        for event in reader.flatten() {
+            writer.serialize_event(event).unwrap();
         }
         let actual_output = String::from_utf8(writer.finish().unwrap()).unwrap();
         assert_eq!(
@@ -38,7 +34,7 @@ fn test_error_messages() {
     let entries = [
         (
             b"".as_slice(),
-            "Parser error at line 1 column 1: Unexpected end of file, a value was expected",
+            "Parser error at line 1 column 1: Unexpected end of file",
         ),
         (
             b"\n}",
@@ -61,6 +57,7 @@ fn test_error_messages() {
         assert_eq!(
             SliceJsonParser::new(json)
                 .parse_next()
+                .unwrap()
                 .unwrap_err()
                 .to_string(),
             error

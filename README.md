@@ -17,15 +17,16 @@ or [simd-json](https://crates.io/crates/simd-json).
 Parser example:
 
 ```rust
+use std::borrow::Cow;
 use json_event_parser::{ReaderJsonParser, JsonEvent};
 
 let json = b"{\"foo\": 1}";
 let mut reader = ReaderJsonParser::new(json.as_slice());
-assert_eq!(reader.parse_next()?, JsonEvent::StartObject);
-assert_eq!(reader.parse_next()?, JsonEvent::ObjectKey("foo".into()));
-assert_eq!(reader.parse_next()?, JsonEvent::Number("1".into()));
-assert_eq!(reader.parse_next()?, JsonEvent::EndObject);
-assert_eq!(reader.parse_next()?, JsonEvent::Eof);
+assert!(matches!(reader.parse_next(), Some(Ok(JsonEvent::StartObject))));
+assert!(matches!(reader.parse_next(), Some(Ok(JsonEvent::ObjectKey(Cow::Borrowed("foo"))))));
+assert!(matches!(reader.parse_next(), Some(Ok(JsonEvent::Number(Cow::Borrowed("1"))))));
+assert!(matches!(reader.parse_next(), Some(Ok(JsonEvent::EndObject))));
+assert!(matches!(reader.parse_next(), None));
 # std::io::Result::Ok(())
 ```
 
@@ -35,10 +36,10 @@ Serializer example:
 use json_event_parser::{WriterJsonSerializer, JsonEvent};
 
 let mut writer = WriterJsonSerializer::new(Vec::new());
-writer.write_event(JsonEvent::StartObject) ?;
-writer.write_event(JsonEvent::ObjectKey("foo".into())) ?;
-writer.write_event(JsonEvent::Number("1".into())) ?;
-writer.write_event(JsonEvent::EndObject) ?;
+writer.serialize_event(JsonEvent::StartObject)?;
+writer.serialize_event(JsonEvent::ObjectKey("foo".into()))?;
+writer.serialize_event(JsonEvent::Number("1".into()))?;
+writer.serialize_event(JsonEvent::EndObject)?;
 
 assert_eq!(writer.finish()?.as_slice(), b"{\"foo\":1}");
 # std::io::Result::Ok(())

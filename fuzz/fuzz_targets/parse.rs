@@ -1,7 +1,7 @@
 #![no_main]
 
 use json_event_parser::{
-    JsonEvent, JsonSyntaxError, LowLevelJsonParser, LowLevelJsonParserResult, WriterJsonSerializer,
+    JsonSyntaxError, LowLevelJsonParser, LowLevelJsonParserResult, WriterJsonSerializer,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -20,30 +20,31 @@ fn parse_chunks(chunks: &[&[u8]]) -> (String, Option<JsonSyntaxError>) {
                 consumed_bytes,
             } = reader.parse_next(&input_buffer[input_cursor..], i == chunks.len() - 1);
             input_cursor += consumed_bytes;
+            let Some(event) = event else {
+                break;
+            };
             match event {
-                Some(Ok(JsonEvent::Eof)) => {
-                    if error.is_none() {
-                        writer.finish().unwrap();
-                    }
-                    return (String::from_utf8(output_buffer).unwrap(), error);
-                }
-                Some(Ok(event)) => {
+                Ok(event) => {
                     if error.is_none() {
                         writer.serialize_event(event).unwrap();
                     } else {
                         let _ = writer.serialize_event(event); // We don't know if we write ok structure
                     }
                 }
-                Some(Err(e)) => {
+                Err(e) => {
                     if error.is_none() {
                         error = Some(e)
                     }
                 }
-                None => break,
             }
         }
     }
-    panic!("Should not be reached")
+    if error.is_none() {
+        writer.finish().unwrap();
+    } else {
+        let _ = writer.finish(); // We don't know if we write ok structure
+    }
+    (String::from_utf8(output_buffer).unwrap(), error)
 }
 
 fn merge<'a>(slices: impl IntoIterator<Item = &'a [u8]>) -> Vec<u8> {
