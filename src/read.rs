@@ -472,7 +472,7 @@ impl LowLevelJsonParser {
                     (None, None)
                 } else {
                     let (event, _) = self.apply_new_token(token);
-                    (event, Some("Object keys must be strings".into()))
+                    (event, Some("Object keys must be followed by a colon ':'".into()))
                 }
             }
             Some(JsonState::ObjectValue) => {
