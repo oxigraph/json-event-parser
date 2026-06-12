@@ -37,6 +37,7 @@ pub struct ReaderJsonParser<R: Read> {
 }
 
 impl<R: Read> ReaderJsonParser<R> {
+    #[inline]
     pub const fn new(read: R) -> Self {
         Self {
             input_buffer: Vec::new(),
@@ -50,11 +51,13 @@ impl<R: Read> ReaderJsonParser<R> {
     }
 
     /// Sets the max size of the internal buffer in bytes
+    #[inline]
     pub fn with_max_buffer_size(mut self, size: usize) -> Self {
         self.max_buffer_size = size;
         self
     }
 
+    #[inline]
     pub fn parse_next(&mut self) -> Result<JsonEvent<'_>, JsonParseError> {
         loop {
             {
@@ -148,6 +151,7 @@ pub struct TokioAsyncReaderJsonParser<R: AsyncRead + Unpin> {
 
 #[cfg(feature = "async-tokio")]
 impl<R: AsyncRead + Unpin> TokioAsyncReaderJsonParser<R> {
+    #[inline]
     pub const fn new(read: R) -> Self {
         Self {
             input_buffer: Vec::new(),
@@ -161,11 +165,13 @@ impl<R: AsyncRead + Unpin> TokioAsyncReaderJsonParser<R> {
     }
 
     /// Sets the max size of the internal buffer in bytes
+    #[inline]
     pub fn with_max_buffer_size(mut self, size: usize) -> Self {
         self.max_buffer_size = size;
         self
     }
 
+    #[inline]
     pub async fn parse_next(&mut self) -> Result<JsonEvent<'_>, JsonParseError> {
         loop {
             {
@@ -247,6 +253,7 @@ pub struct SliceJsonParser<'a> {
 }
 
 impl<'a> SliceJsonParser<'a> {
+    #[inline]
     pub const fn new(buffer: &'a [u8]) -> Self {
         Self {
             input_buffer: buffer,
@@ -254,6 +261,7 @@ impl<'a> SliceJsonParser<'a> {
         }
     }
 
+    #[inline]
     pub fn parse_next(&mut self) -> Result<JsonEvent<'a>, JsonSyntaxError> {
         loop {
             let LowLevelJsonParserResult {
@@ -336,6 +344,7 @@ pub struct LowLevelJsonParser {
 }
 
 impl LowLevelJsonParser {
+    #[inline]
     pub const fn new() -> Self {
         Self {
             lexer: JsonLexer {
@@ -353,6 +362,7 @@ impl LowLevelJsonParser {
     }
 
     /// Maximal allowed number of nested object and array openings. Infinite by default.
+    #[inline]
     pub fn with_max_stack_size(mut self, size: usize) -> Self {
         self.max_state_stack_size = size;
         self
@@ -361,6 +371,7 @@ impl LowLevelJsonParser {
     /// Reads a new event from the data in `input_buffer`.
     ///
     /// `is_ending` must be set to true if all the JSON data have been already consumed or are in `input_buffer`.
+    #[inline]
     pub fn parse_next<'a>(
         &mut self,
         input_buffer: &'a [u8],
@@ -436,6 +447,7 @@ impl LowLevelJsonParser {
         self.parse_next(input_buffer, is_ending)
     }
 
+    #[inline]
     fn apply_new_token<'a>(
         &mut self,
         token: JsonToken<'a>,
@@ -530,6 +542,7 @@ impl LowLevelJsonParser {
         }
     }
 
+    #[inline]
     fn apply_new_token_for_value<'a>(
         &mut self,
         token: JsonToken<'a>,
@@ -565,12 +578,14 @@ impl LowLevelJsonParser {
         }
     }
 
+    #[inline]
     fn push_state_stack(&mut self, state: JsonState) -> Result<(), String> {
         self.check_stack_size()?;
         self.state_stack.push(state);
         Ok(())
     }
 
+    #[inline]
     fn check_stack_size(&self) -> Result<(), String> {
         if self.state_stack.len() > self.max_state_stack_size {
             Err(format!(
@@ -626,6 +641,7 @@ struct JsonLexer {
 }
 
 impl JsonLexer {
+    #[inline]
     fn read_next_token<'a>(
         &mut self,
         mut input_buffer: &'a [u8],
@@ -728,6 +744,7 @@ impl JsonLexer {
         }
     }
 
+    #[inline]
     fn read_string<'a>(
         &mut self,
         input_buffer: &'a [u8],
@@ -939,6 +956,7 @@ impl JsonLexer {
         }
     }
 
+    #[inline]
     fn read_constant(
         &mut self,
         input_buffer: &[u8],
@@ -966,6 +984,7 @@ impl JsonLexer {
         )))
     }
 
+    #[inline]
     fn read_number<'a>(
         &mut self,
         input_buffer: &'a [u8],
@@ -1062,6 +1081,7 @@ impl JsonLexer {
         ))))
     }
 
+    #[inline]
     fn decode_utf8<'a>(
         &self,
         input_buffer: &'a [u8],
@@ -1096,6 +1116,7 @@ impl JsonLexer {
     }
 }
 
+#[inline]
 fn read_hexa_char(input: &[u8]) -> Result<u32, String> {
     let mut value = 0;
     for c in input.iter().copied() {
@@ -1115,6 +1136,7 @@ fn read_hexa_char(input: &[u8]) -> Result<u32, String> {
     Ok(value)
 }
 
+#[inline]
 fn read_digits(input_buffer: &[u8], is_ending: bool) -> Option<usize> {
     let count = input_buffer
         .iter()
@@ -1126,6 +1148,7 @@ fn read_digits(input_buffer: &[u8], is_ending: bool) -> Option<usize> {
     Some(count)
 }
 
+#[inline]
 fn owned_event(event: JsonEvent<'_>) -> JsonEvent<'static> {
     match event {
         JsonEvent::String(s) => JsonEvent::String(s.into_owned().into()),
