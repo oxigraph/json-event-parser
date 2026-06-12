@@ -37,6 +37,7 @@ pub struct ReaderJsonParser<R: Read> {
 }
 
 impl<R: Read> ReaderJsonParser<R> {
+    #[inline]
     pub const fn new(read: R) -> Self {
         Self {
             input_buffer: Vec::new(),
@@ -50,11 +51,13 @@ impl<R: Read> ReaderJsonParser<R> {
     }
 
     /// Sets the max size of the internal buffer in bytes
+    #[inline]
     pub fn with_max_buffer_size(mut self, size: usize) -> Self {
         self.max_buffer_size = size;
         self
     }
 
+    #[inline]
     pub fn parse_next(&mut self) -> Result<JsonEvent<'_>, JsonParseError> {
         loop {
             {
@@ -148,6 +151,7 @@ pub struct TokioAsyncReaderJsonParser<R: AsyncRead + Unpin> {
 
 #[cfg(feature = "async-tokio")]
 impl<R: AsyncRead + Unpin> TokioAsyncReaderJsonParser<R> {
+    #[inline]
     pub const fn new(read: R) -> Self {
         Self {
             input_buffer: Vec::new(),
@@ -161,11 +165,13 @@ impl<R: AsyncRead + Unpin> TokioAsyncReaderJsonParser<R> {
     }
 
     /// Sets the max size of the internal buffer in bytes
+    #[inline]
     pub fn with_max_buffer_size(mut self, size: usize) -> Self {
         self.max_buffer_size = size;
         self
     }
 
+    #[inline]
     pub async fn parse_next(&mut self) -> Result<JsonEvent<'_>, JsonParseError> {
         loop {
             {
@@ -247,6 +253,7 @@ pub struct SliceJsonParser<'a> {
 }
 
 impl<'a> SliceJsonParser<'a> {
+    #[inline]
     pub const fn new(buffer: &'a [u8]) -> Self {
         Self {
             input_buffer: buffer,
@@ -336,6 +343,7 @@ pub struct LowLevelJsonParser {
 }
 
 impl LowLevelJsonParser {
+    #[inline]
     pub const fn new() -> Self {
         Self {
             lexer: JsonLexer {
@@ -353,6 +361,7 @@ impl LowLevelJsonParser {
     }
 
     /// Maximal allowed number of nested object and array openings. Infinite by default.
+    #[inline]
     pub fn with_max_stack_size(mut self, size: usize) -> Self {
         self.max_state_stack_size = size;
         self
@@ -361,6 +370,7 @@ impl LowLevelJsonParser {
     /// Reads a new event from the data in `input_buffer`.
     ///
     /// `is_ending` must be set to true if all the JSON data have been already consumed or are in `input_buffer`.
+    #[inline]
     pub fn parse_next<'a>(
         &mut self,
         input_buffer: &'a [u8],
