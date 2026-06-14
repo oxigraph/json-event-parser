@@ -34,11 +34,6 @@ impl<W: Write> WriterJsonSerializer<W> {
         self.writer.serialize_event(event, &mut self.write)
     }
 
-    #[deprecated(note = "Use serialize_event() instead")]
-    pub fn write_event(&mut self, event: JsonEvent<'_>) -> Result<()> {
-        self.serialize_event(event)
-    }
-
     pub fn finish(self) -> Result<W> {
         self.writer.validate_eof()?;
         Ok(self.write)
@@ -87,11 +82,6 @@ impl<W: AsyncWrite + Unpin> TokioAsyncWriterJsonSerializer<W> {
         self.write.write_all(&self.buffer).await?;
         self.buffer.clear();
         Ok(())
-    }
-
-    #[deprecated(note = "Use serialize_event() instead")]
-    pub async fn write_event(&mut self, event: JsonEvent<'_>) -> Result<()> {
-        self.serialize_event(event).await
     }
 
     pub fn finish(self) -> Result<W> {
@@ -208,16 +198,7 @@ impl LowLevelJsonSerializer {
                 write_escaped_json_string(&key, &mut write)?;
                 write.write_all(b":")
             }
-            JsonEvent::Eof => Err(Error::new(
-                ErrorKind::InvalidInput,
-                "EOF is not allowed in JSON writer",
-            )),
         }
-    }
-
-    #[deprecated(note = "Use serialize_event() instead")]
-    pub fn write_event(&mut self, event: JsonEvent<'_>, write: impl Write) -> Result<()> {
-        self.serialize_event(event, write)
     }
 
     fn before_value(&mut self, mut write: impl Write) -> Result<()> {
