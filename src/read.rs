@@ -40,95 +40,45 @@ const MAX_BUFFER_SIZE: usize = 4096 * 4096;
 /// # std::io::Result::Ok(())
 /// ```
 pub struct ReaderJsonParser<R: Read> {
-    input_buffer: Vec<u8>,
-    input_buffer_start: usize,
-    input_buffer_end: usize,
-    max_buffer_size: usize,
-    is_ending: bool,
     read: R,
-    parser: LowLevelJsonParser,
+    parser: BufferJsonParser,
 }
 
 impl<R: Read> ReaderJsonParser<R> {
     #[inline]
     pub const fn new(read: R) -> Self {
         Self {
-            input_buffer: Vec::new(),
-            input_buffer_start: 0,
-            input_buffer_end: 0,
-            max_buffer_size: MAX_BUFFER_SIZE,
-            is_ending: false,
             read,
-            parser: LowLevelJsonParser::new(),
+            parser: BufferJsonParser::new(),
         }
     }
 
     /// Sets the max size of the internal buffer in bytes
     #[inline]
     pub fn with_max_buffer_size(mut self, size: usize) -> Self {
-        self.max_buffer_size = size;
+        self.parser.max_buffer_size = size;
         self
     }
 
     #[inline]
     pub fn parse_next(&mut self) -> Option<Result<JsonEvent<'_>, JsonParseError>> {
         loop {
+            // SAFETY: Borrow checker workaround https://github.com/rust-lang/rust/issues/70255
+            #[allow(unsafe_code)]
+            if let Some(event) = unsafe {
+                let ptr: *mut _ = &mut self.parser;
+                &mut *ptr
+            }
+            .parse_next()
             {
-                let LowLevelJsonParserResult {
-                    event,
-                    consumed_bytes,
-                } = self.parser.parse_next(
-                    #[allow(unsafe_code)]
-                    unsafe {
-                        let input_buffer_ptr: *const [u8] =
-                            &self.input_buffer[self.input_buffer_start..self.input_buffer_end];
-                        &*input_buffer_ptr
-                    }, // SAFETY: Borrow checker workaround https://github.com/rust-lang/rust/issues/70255
-                    self.is_ending,
-                );
-                self.input_buffer_start += consumed_bytes;
-                if let Some(event) = event {
-                    return Some(event.map_err(Into::into));
-                } else if self.is_ending {
-                    return None;
-                }
+                return Some(event.map_err(Into::into));
             }
-            if self.input_buffer_start > 0 {
-                self.input_buffer
-                    .copy_within(self.input_buffer_start..self.input_buffer_end, 0);
-                self.input_buffer_end -= self.input_buffer_start;
-                self.input_buffer_start = 0;
+            if self.parser.is_ending {
+                return None;
             }
-            if self.input_buffer.len() == self.max_buffer_size {
-                return Some(Err(io::Error::new(
-                    io::ErrorKind::OutOfMemory,
-                    format!(
-                        "Reached the buffer maximal size of {}",
-                        self.max_buffer_size
-                    ),
-                )
-                .into()));
+            if let Err(e) = self.parser.extend_from_reader(&mut self.read) {
+                return Some(Err(e.into()));
             }
-            let min_end = min(
-                self.input_buffer_end + MIN_BUFFER_SIZE,
-                self.max_buffer_size,
-            );
-            if self.input_buffer.len() < min_end {
-                self.input_buffer.resize(min_end, 0);
-            }
-            if self.input_buffer.len() < self.input_buffer.capacity() {
-                // We keep extending to have as much space as available without reallocation
-                self.input_buffer.resize(self.input_buffer.capacity(), 0);
-            }
-            let read = match self
-                .read
-                .read(&mut self.input_buffer[self.input_buffer_end..])
-            {
-                Ok(read) => read,
-                Err(e) => return Some(Err(e.into())),
-            };
-            self.input_buffer_end += read;
-            self.is_ending = read == 0;
         }
     }
 }
@@ -164,13 +114,8 @@ impl<R: Read> ReaderJsonParser<R> {
 /// ```
 #[cfg(feature = "async-tokio")]
 pub struct TokioAsyncReaderJsonParser<R: AsyncRead + Unpin> {
-    input_buffer: Vec<u8>,
-    input_buffer_start: usize,
-    input_buffer_end: usize,
-    max_buffer_size: usize,
-    is_ending: bool,
     read: R,
-    parser: LowLevelJsonParser,
+    parser: BufferJsonParser,
 }
 
 #[cfg(feature = "async-tokio")]
@@ -178,84 +123,166 @@ impl<R: AsyncRead + Unpin> TokioAsyncReaderJsonParser<R> {
     #[inline]
     pub const fn new(read: R) -> Self {
         Self {
-            input_buffer: Vec::new(),
-            input_buffer_start: 0,
-            input_buffer_end: 0,
-            max_buffer_size: MAX_BUFFER_SIZE,
-            is_ending: false,
             read,
-            parser: LowLevelJsonParser::new(),
+            parser: BufferJsonParser::new(),
         }
     }
 
     /// Sets the max size of the internal buffer in bytes
     #[inline]
     pub fn with_max_buffer_size(mut self, size: usize) -> Self {
-        self.max_buffer_size = size;
+        self.parser.max_buffer_size = size;
         self
     }
 
     #[inline]
     pub async fn parse_next(&mut self) -> Option<Result<JsonEvent<'_>, JsonParseError>> {
         loop {
+            // SAFETY: Borrow checker workaround https://github.com/rust-lang/rust/issues/70255
+            #[allow(unsafe_code)]
+            if let Some(event) = unsafe {
+                let ptr: *mut _ = &mut self.parser;
+                &mut *ptr
+            }
+            .parse_next()
             {
-                let LowLevelJsonParserResult {
-                    event,
-                    consumed_bytes,
-                } = self.parser.parse_next(
-                    #[allow(unsafe_code)]
-                    unsafe {
-                        let input_buffer_ptr: *const [u8] =
-                            &self.input_buffer[self.input_buffer_start..self.input_buffer_end];
-                        &*input_buffer_ptr
-                    }, // Borrow checker workaround https://github.com/rust-lang/rust/issues/70255
-                    self.is_ending,
-                );
-                self.input_buffer_start += consumed_bytes;
-                if let Some(event) = event {
-                    return Some(event.map_err(Into::into));
-                } else if self.is_ending {
-                    return None;
-                }
+                return Some(event.map_err(Into::into));
             }
-            if self.input_buffer_start > 0 {
-                self.input_buffer
-                    .copy_within(self.input_buffer_start..self.input_buffer_end, 0);
-                self.input_buffer_end -= self.input_buffer_start;
-                self.input_buffer_start = 0;
+            if self.parser.is_ending {
+                return None;
             }
-            if self.input_buffer.len() == self.max_buffer_size {
-                return Some(Err(io::Error::new(
-                    io::ErrorKind::OutOfMemory,
-                    format!(
-                        "Reached the buffer maximal size of {}",
-                        self.max_buffer_size
-                    ),
-                )
-                .into()));
-            }
-            let min_end = min(
-                self.input_buffer_end + MIN_BUFFER_SIZE,
-                self.max_buffer_size,
-            );
-            if self.input_buffer.len() < min_end {
-                self.input_buffer.resize(min_end, 0);
-            }
-            if self.input_buffer.len() < self.input_buffer.capacity() {
-                // We keep extending to have as much space as available without reallocation
-                self.input_buffer.resize(self.input_buffer.capacity(), 0);
-            }
-            let read = match self
-                .read
-                .read(&mut self.input_buffer[self.input_buffer_end..])
+            if let Err(e) = self
+                .parser
+                .extend_from_tokio_async_reader(&mut self.read)
                 .await
             {
-                Ok(read) => read,
-                Err(e) => return Some(Err(e.into())),
-            };
-            self.input_buffer_end += read;
-            self.is_ending = read == 0;
+                return Some(Err(e.into()));
+            }
         }
+    }
+}
+
+struct BufferJsonParser {
+    input_buffer: Vec<u8>,
+    input_buffer_start: usize,
+    input_buffer_end: usize,
+    max_buffer_size: usize,
+    is_ending: bool,
+    parser: LowLevelJsonParser,
+}
+
+impl BufferJsonParser {
+    #[inline]
+    const fn new() -> Self {
+        Self {
+            input_buffer: Vec::new(),
+            input_buffer_start: 0,
+            input_buffer_end: 0,
+            max_buffer_size: MAX_BUFFER_SIZE,
+            is_ending: false,
+            parser: LowLevelJsonParser::new(),
+        }
+    }
+
+    #[inline]
+    fn parse_next(&mut self) -> Option<Result<JsonEvent<'_>, JsonSyntaxError>> {
+        let LowLevelJsonParserResult {
+            event,
+            consumed_bytes,
+        } = self.parser.parse_next(
+            &self.input_buffer[self.input_buffer_start..self.input_buffer_end],
+            self.is_ending,
+        );
+        self.input_buffer_start += consumed_bytes;
+        event
+    }
+
+    #[inline]
+    fn extend_from_reader(&mut self, read: &mut impl Read) -> io::Result<()> {
+        self.prepare_buffer_for_read()?;
+
+        // Read data from the reader into the buffer from the
+        // lower bound until the end
+        let bytes_read = read.read(&mut self.input_buffer[self.input_buffer_end..])?;
+        // Shrink the data to the length of the data read
+        // minus any padding 0s present from the previous resize
+        self.input_buffer_end += bytes_read;
+        self.is_ending = bytes_read == 0;
+        Ok(())
+    }
+
+    #[cfg(feature = "async-tokio")]
+    #[inline]
+    async fn extend_from_tokio_async_reader(
+        &mut self,
+        read: &mut (impl AsyncRead + Unpin),
+    ) -> io::Result<()> {
+        self.prepare_buffer_for_read()?;
+
+        // Read data from the reader into the buffer from the
+        // lower bound until the end
+        let bytes_read = read
+            .read(&mut self.input_buffer[self.input_buffer_end..])
+            .await?;
+        // Shrink the data to the length of the data read
+        // minus any padding 0s present from the previous resize
+        self.input_buffer_end += bytes_read;
+        self.is_ending = bytes_read == 0;
+        Ok(())
+    }
+
+    fn prepare_buffer_for_read(&mut self) -> io::Result<()> {
+        self.shift_input_buffer();
+
+        if self.input_buffer.len() >= self.max_buffer_size {
+            return Err(io::Error::new(
+                io::ErrorKind::OutOfMemory,
+                format!(
+                    "Reached the buffer maximal size of {}. The buffer size can be increased at the cost of higher memory use if large data is required",
+                    self.max_buffer_size
+                ),
+            ));
+        }
+
+        let upper_bound = self.resized_buffer_len();
+        // Fill the buffer until the upper bound with 0s
+        if self.input_buffer.len() < upper_bound {
+            self.input_buffer.resize(upper_bound, 0);
+
+            // We keep extending to have as much space as available without reallocation
+            if self.input_buffer.len() < self.input_buffer.capacity() {
+                self.input_buffer.resize(self.input_buffer.capacity(), 0);
+            }
+        }
+
+        Ok(())
+    }
+
+    // Return the new size for a buffer which exponentially grows in size
+    fn resized_buffer_len(&self) -> usize {
+        // Each one of these expressions will at least double the
+        // size of the buffer, but in such a way that will not
+        // exceed the maximum buffer size or allocate under the minimum buffer size.
+        min(
+            self.max_buffer_size,
+            // We take the max here to ensure that
+            // the buffer always has at least the size of the
+            // data plus the minimum buffer size
+            max(
+                self.input_buffer_end + MIN_BUFFER_SIZE,
+                self.input_buffer_end.saturating_mul(2),
+            ),
+        )
+    }
+
+    fn shift_input_buffer(&mut self) {
+        if self.input_buffer_start == 0 {
+            return; // Nothing to do
+        }
+        self.input_buffer
+            .copy_within(self.input_buffer_start..self.input_buffer_end, 0);
+        self.input_buffer_end -= self.input_buffer_start;
+        self.input_buffer_start = 0;
     }
 }
 
