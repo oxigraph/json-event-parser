@@ -1,11 +1,11 @@
 use crate::JsonEvent;
+use logos::{Lexer, Logos};
+use std::borrow::Cow;
 use std::cmp::{max, min};
 use std::error::Error;
 use std::io::{self, Read};
 use std::ops::Range;
 use std::{fmt, str};
-use std::borrow::Cow;
-use logos::{Lexer, Logos};
 #[cfg(feature = "async-tokio")]
 use tokio::io::{AsyncRead, AsyncReadExt};
 
@@ -266,23 +266,17 @@ impl<R: AsyncRead + Unpin> TokioAsyncReaderJsonParser<R> {
 /// use std::borrow::Cow;
 ///
 /// let mut reader = SliceJsonParser::new(b"{\"foo\": 1}");
+/// assert!(matches!(reader.next(), Some(Ok(JsonEvent::StartObject))));
 /// assert!(matches!(
-///     reader.parse_next(),
-///     Some(Ok(JsonEvent::StartObject))
-/// ));
-/// assert!(matches!(
-///     reader.parse_next(),
+///     reader.next(),
 ///     Some(Ok(JsonEvent::ObjectKey(Cow::Borrowed("foo"))))
 /// ));
 /// assert!(matches!(
-///     reader.parse_next(),
+///     reader.next(),
 ///     Some(Ok(JsonEvent::Number(Cow::Borrowed("1"))))
 /// ));
-/// assert!(matches!(
-///     reader.parse_next(),
-///     Some(Ok(JsonEvent::EndObject))
-/// ));
-/// assert!(matches!(reader.parse_next(), None));
+/// assert!(matches!(reader.next(), Some(Ok(JsonEvent::EndObject))));
+/// assert!(matches!(reader.next(), None));
 /// # std::io::Result::Ok(())
 /// ```
 pub struct SliceJsonParser<'a> {
@@ -304,7 +298,12 @@ impl<'a> Iterator for SliceJsonParser<'a> {
     type Item = Result<JsonEvent<'a>, JsonSyntaxError>;
 
     fn next(&mut self) -> Option<Result<JsonEvent<'a>, JsonSyntaxError>> {
-        self.parse_next()
+        let LowLevelJsonParserResult {
+            event,
+            consumed_bytes,
+        } = self.parser.parse_next(self.input_buffer, true);
+        self.input_buffer = &self.input_buffer[consumed_bytes..];
+        event
     }
 }
 
@@ -634,244 +633,55 @@ enum JsonState {
     ArrayCommaOrEnd,
 }
 
-#[derive(Logos, Eq, PartialEq, Clone, Debug)]
-#[logos(skip r"[ \t\r\n\f]+")]
-#[logos(utf8 = false)]
+#[derive(Eq, PartialEq, Clone, Debug)]
 enum JsonToken<'a> {
+    OpeningSquareBracket, // [
+    ClosingSquareBracket, // ]
+    OpeningCurlyBracket,  // {
+    ClosingCurlyBracket,  // }
+    Comma,                // ,
+    Colon,                // :
+    String(Cow<'a, str>), // "..."
+    Number(&'a str),      // 1.2e3
+    True,                 // true
+    False,                // false
+    Null,                 // null
+}
+
+#[derive(Logos, Eq, PartialEq, Clone, Debug)]
+#[logos(skip r"[ \t\r\n]+")]
+#[logos(utf8 = false)]
+enum LogosJsonToken<'a> {
     #[token("[")]
     OpeningSquareBracket, // [
     #[token("]")]
     ClosingSquareBracket, // ]
     #[token("{")]
-    OpeningCurlyBracket,  // {
+    OpeningCurlyBracket, // {
     #[token("}")]
-    ClosingCurlyBracket,  // }
-    #[token("{,")]
-    Comma,                // ,
+    ClosingCurlyBracket, // }
+    #[token(",")]
+    Comma, // ,
     #[token(":")]
-    Colon,                // :
-    #[regex(r#""([^"\\\x00-\x1F]|\\(["\\bnfrt/]|u[a-fA-F0-9]{4}))*""#, |lex| str::from_utf8(lex.slice()).unwrap())]
-    String(&'a str), // "..."
+    Colon, // :
+    #[regex(r#""[^"\\\x00-\x1F]*""#, |lex| {
+        let slice = lex.slice();
+        str::from_utf8(&slice[1..slice.len() - 1]).expect("we already validated UTF-8")
+    })]
+    StringWithoutEscapes(&'a str), // "..."
+    #[regex(r#""[^"\\\x00-\x1F]*(\\(["\\bnfrt/]|u[a-fA-F0-9]{4})[^"\\\x00-\x1F]*)+""#, |lex| {
+        let slice = lex.slice();
+        str::from_utf8(&slice[1..slice.len() - 1]).expect("we already validated UTF-8")
+    })]
+    StringWithEscapes(&'a str), // "..."
     #[regex(r"-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?", |lex| str::from_utf8(lex.slice()).unwrap())]
     Number(&'a str), // 1.2e3
     #[token("true")]
-    True,                 // true
+    True, // true
     #[token("false")]
-    False,                // false
+    False, // false
     #[token("null")]
-    Null,                 // null
-}
-
-fn unescape_string<'a>(
-    input_buffer: &'a [u8],
-) -> Result<Cow<'a, str>, JsonSyntaxError> {
-    let input_buffer = str::from_utf8(input_buffer).unwrap(); // TODO
-    let mut parts = input_buffer.iter()('/');
-    let mut error = None;
-    let mut string: Option<(String, usize)> = None;
-    let mut next_byte_offset = 1;
-    loop {
-        match *input_buffer.get(next_byte_offset)? {
-            b'"' => {
-                // end of string
-                let result = Some(if let Some(error) = error {
-                    Err(error)
-                } else if let Some((mut string, read_until)) = string {
-                    if read_until < next_byte_offset {
-                        let (str, e) = self.decode_utf8(
-                            &input_buffer[read_until..next_byte_offset],
-                            self.file_offset + u64::try_from(read_until).unwrap(),
-                        );
-                        error = error.or(e);
-                        string.push_str(&str);
-                    }
-                    if let Some(error) = error {
-                        Err(error)
-                    } else {
-                        Ok(JsonToken::String(Cow::Owned(string)))
-                    }
-                } else {
-                    let (string, error) = self
-                        .decode_utf8(&input_buffer[1..next_byte_offset], self.file_offset + 1);
-                    if let Some(error) = error {
-                        Err(error)
-                    } else {
-                        Ok(JsonToken::String(string))
-                    }
-                });
-                self.file_offset += u64::try_from(next_byte_offset).unwrap() + 1;
-                return result;
-            }
-            b'\\' => {
-                // Escape sequences
-                if string.is_none() {
-                    string = Some((String::new(), 1))
-                }
-                let (string, read_until) = string.as_mut().unwrap();
-                if *read_until < next_byte_offset {
-                    let (str, e) = self.decode_utf8(
-                        &input_buffer[*read_until..next_byte_offset],
-                        self.file_offset + u64::try_from(*read_until).unwrap(),
-                    );
-                    error = error.or(e);
-                    string.push_str(&str);
-                }
-                next_byte_offset += 1;
-                match *input_buffer.get(next_byte_offset)? {
-                    b'"' => {
-                        string.push('"');
-                        next_byte_offset += 1;
-                    }
-                    b'\\' => {
-                        string.push('\\');
-                        next_byte_offset += 1;
-                    }
-                    b'/' => {
-                        string.push('/');
-                        next_byte_offset += 1;
-                    }
-                    b'b' => {
-                        string.push('\u{8}');
-                        next_byte_offset += 1;
-                    }
-                    b'f' => {
-                        string.push('\u{C}');
-                        next_byte_offset += 1;
-                    }
-                    b'n' => {
-                        string.push('\n');
-                        next_byte_offset += 1;
-                    }
-                    b'r' => {
-                        string.push('\r');
-                        next_byte_offset += 1;
-                    }
-                    b't' => {
-                        string.push('\t');
-                        next_byte_offset += 1;
-                    }
-                    b'u' => {
-                        next_byte_offset += 1;
-                        let val = input_buffer.get(next_byte_offset..next_byte_offset + 4)?;
-                        next_byte_offset += 4;
-                        let code_point = match read_hexa_char(val) {
-                            Ok(cp) => cp,
-                            Err(e) => {
-                                error = error.or_else(|| {
-                                    let pos = self.file_offset
-                                        + u64::try_from(next_byte_offset).unwrap();
-                                    Some(self.syntax_error(pos - 4..pos, e))
-                                });
-                                char::REPLACEMENT_CHARACTER.into()
-                            }
-                        };
-                        if let Some(c) = char::from_u32(code_point) {
-                            string.push(c);
-                        } else {
-                            let high_surrogate = code_point;
-                            if !(0xD800..=0xDBFF).contains(&high_surrogate) {
-                                error = error.or_else(|| {
-                                    let pos = self.file_offset
-                                        + u64::try_from(next_byte_offset).unwrap();
-                                    Some(self.syntax_error(
-                                        pos - 6..pos,
-                                        format!(
-                                            "\\u{:X} is not a valid high surrogate",
-                                            high_surrogate
-                                        ),
-                                    ))
-                                });
-                            }
-                            let val =
-                                input_buffer.get(next_byte_offset..next_byte_offset + 6)?;
-                            next_byte_offset += 6;
-                            if !val.starts_with(b"\\u") {
-                                error = error.or_else(|| {
-                                    let pos = self.file_offset + u64::try_from(next_byte_offset).unwrap();
-                                    Some(self.syntax_error(
-                                        pos - 6..pos,
-                                        format!(
-                                            "\\u{:X} is a high surrogate and should be followed by a low surrogate \\uXXXX",
-                                            high_surrogate
-                                        )
-                                    ))
-                                });
-                            }
-                            let low_surrogate = match read_hexa_char(&val[2..]) {
-                                Ok(cp) => cp,
-                                Err(e) => {
-                                    error = error.or_else(|| {
-                                        let pos = self.file_offset
-                                            + u64::try_from(next_byte_offset).unwrap();
-                                        Some(self.syntax_error(pos - 6..pos, e))
-                                    });
-                                    char::REPLACEMENT_CHARACTER.into()
-                                }
-                            };
-                            if !(0xDC00..=0xDFFF).contains(&low_surrogate) {
-                                error = error.or_else(|| {
-                                    let pos = self.file_offset
-                                        + u64::try_from(next_byte_offset).unwrap();
-                                    Some(self.syntax_error(
-                                        pos - 6..pos,
-                                        format!(
-                                            "\\u{:X} is not a valid low surrogate",
-                                            low_surrogate
-                                        ),
-                                    ))
-                                });
-                            }
-                            let code_point = 0x10000
-                                + ((high_surrogate & 0x03FF) << 10)
-                                + (low_surrogate & 0x03FF);
-                            if let Some(c) = char::from_u32(code_point) {
-                                string.push(c)
-                            } else {
-                                string.push(char::REPLACEMENT_CHARACTER);
-                                error = error.or_else(|| {
-                                    let pos = self.file_offset
-                                        + u64::try_from(next_byte_offset).unwrap();
-                                    Some(self.syntax_error(
-                                        pos - 12..pos,
-                                        format!(
-                                            "\\u{:X}\\u{:X} is an invalid surrogate pair",
-                                            high_surrogate, low_surrogate
-                                        ),
-                                    ))
-                                });
-                            }
-                        }
-                    }
-                    c => {
-                        next_byte_offset += 1;
-                        error = error.or_else(|| {
-                            let pos =
-                                self.file_offset + u64::try_from(next_byte_offset).unwrap();
-                            Some(self.syntax_error(
-                                pos - 2..pos,
-                                format!("'\\{}' is not a valid escape sequence", char::from(c)),
-                            ))
-                        });
-                        string.push(char::REPLACEMENT_CHARACTER);
-                    }
-                }
-                *read_until = next_byte_offset;
-            }
-            c @ (0..=0x1F) => {
-                error = error.or_else(|| {
-                    let pos = self.file_offset + u64::try_from(next_byte_offset).unwrap();
-                    Some(self.syntax_error(
-                        pos..pos + 1,
-                        format!("'{}' is not allowed in JSON strings", char::from(c)),
-                    ))
-                });
-                next_byte_offset += 1;
-            }
-            _ => {
-                next_byte_offset += 1;
-            }
-        }
-    }
+    Null, // null
 }
 
 struct JsonLexer {
@@ -900,18 +710,232 @@ impl JsonLexer {
             }
         }
 
-        let mut lexer = if is_ending { Lexer::new(input_buffer) } else { Lexer::new_prefix(input_buffer) };
-        let token = lexer.next()?;
-        let span = lexer.span();
-        let token = token.map_err(|()| self.syntax_error(
-            self.file_offset + u64::try_from(span.start).unwrap()..self.file_offset + u64::try_from(span.end).unwrap(),
-            format!("Unexpected input bytes: '{}'", String::from_utf8_lossy(&input_buffer[span]))
-        ));
+        let mut lexer = if is_ending {
+            Lexer::new(input_buffer)
+        } else {
+            Lexer::new_partial(input_buffer)
+        };
+        let Some(token) = lexer.next() else {
+            // A lexer can consume skipped whitespace without emitting a token.
+            // Preserve that progress while leaving an incomplete partial token
+            // untouched (its span ends at zero).
+            self.file_offset += u64::try_from(lexer.span().end).unwrap();
+            return None;
+        };
+        let token = token
+            .map_err(|()| {
+                let span = lexer.span();
+                self.syntax_error(
+                    self.file_offset + u64::try_from(span.start).unwrap()
+                        ..self.file_offset + u64::try_from(span.end).unwrap(),
+                    format!(
+                        "Unexpected input bytes: '{}'",
+                        String::from_utf8_lossy(&input_buffer[span])
+                    ),
+                )
+            })
+            .and_then(|token| {
+                Ok(match token {
+                    LogosJsonToken::OpeningSquareBracket => JsonToken::OpeningSquareBracket,
+                    LogosJsonToken::ClosingSquareBracket => JsonToken::ClosingSquareBracket,
+                    LogosJsonToken::OpeningCurlyBracket => JsonToken::OpeningCurlyBracket,
+                    LogosJsonToken::ClosingCurlyBracket => JsonToken::ClosingCurlyBracket,
+                    LogosJsonToken::Comma => JsonToken::Comma,
+                    LogosJsonToken::Colon => JsonToken::Colon,
+                    LogosJsonToken::StringWithoutEscapes(v) => JsonToken::String(v.into()),
+                    LogosJsonToken::StringWithEscapes(v) => {
+                        JsonToken::String(self.unescape_string(v.as_bytes())?.into())
+                    }
+                    LogosJsonToken::Number(v) => JsonToken::Number(v),
+                    LogosJsonToken::True => JsonToken::True,
+                    LogosJsonToken::False => JsonToken::False,
+                    LogosJsonToken::Null => JsonToken::Null,
+                })
+            });
         let span = lexer.span();
         self.file_offset += u64::try_from(span.end).unwrap();
-        self.file_start_of_last_token = self.file_offset - u64::try_from(span.end - span.start).unwrap();
+        self.file_start_of_last_token =
+            self.file_offset - u64::try_from(span.end - span.start).unwrap();
         // TODO  file_line and     file_start_of_last_line
         Some(token)
+    }
+
+    fn unescape_string(&self, input_buffer: &[u8]) -> Result<String, JsonSyntaxError> {
+        const TODO: u64 = 0;
+        let mut error = None;
+        let mut output = Vec::with_capacity(input_buffer.len());
+        let mut next_byte_offset = 0;
+        while let Some(next_byte) = input_buffer.get(next_byte_offset) {
+            match *next_byte {
+                b'\\' => {
+                    // Escape sequences
+                    next_byte_offset += 1;
+                    match input_buffer[next_byte_offset] {
+                        b'"' => {
+                            output.push(b'"');
+                            next_byte_offset += 1;
+                        }
+                        b'\\' => {
+                            output.push(b'\\');
+                            next_byte_offset += 1;
+                        }
+                        b'/' => {
+                            output.push(b'/');
+                            next_byte_offset += 1;
+                        }
+                        b'b' => {
+                            output.push(b'\x08');
+                            next_byte_offset += 1;
+                        }
+                        b'f' => {
+                            output.push(b'\x0C');
+                            next_byte_offset += 1;
+                        }
+                        b'n' => {
+                            output.push(b'\n');
+                            next_byte_offset += 1;
+                        }
+                        b'r' => {
+                            output.push(b'\r');
+                            next_byte_offset += 1;
+                        }
+                        b't' => {
+                            output.push(b'\t');
+                            next_byte_offset += 1;
+                        }
+                        b'u' => {
+                            next_byte_offset += 1;
+                            let val = &input_buffer[next_byte_offset..next_byte_offset + 4];
+                            next_byte_offset += 4;
+                            let code_point = match read_hexa_char(val) {
+                                Ok(cp) => cp,
+                                Err(e) => {
+                                    error = error.or_else(|| {
+                                        let pos = TODO + u64::try_from(next_byte_offset).unwrap();
+                                        Some(self.syntax_error(pos - 4..pos, e))
+                                    });
+                                    char::REPLACEMENT_CHARACTER.into()
+                                }
+                            };
+                            if let Some(c) = char::from_u32(code_point) {
+                                let mut buf = [0; 4];
+                                output.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                            } else {
+                                let high_surrogate = code_point;
+                                if !(0xD800..=0xDBFF).contains(&high_surrogate) {
+                                    error = error.or_else(|| {
+                                        let pos = TODO + u64::try_from(next_byte_offset).unwrap();
+                                        Some(self.syntax_error(
+                                            pos - 6..pos,
+                                            format!(
+                                                "\\u{:X} is not a valid high surrogate",
+                                                high_surrogate
+                                            ),
+                                        ))
+                                    });
+                                }
+                                let val = input_buffer
+                                    .get(next_byte_offset..next_byte_offset + 6)
+                                    .unwrap_or(b"\0\0");
+                                next_byte_offset += 6;
+                                if !val.starts_with(b"\\u") {
+                                    error = error.or_else(|| {
+                                        let pos =TODO + u64::try_from(next_byte_offset).unwrap();
+                                        Some(self.syntax_error(
+                                            pos - 6..pos,
+                                            format!(
+                                                "\\u{:X} is a high surrogate and should be followed by a low surrogate \\uXXXX",
+                                                high_surrogate
+                                            )
+                                        ))
+                                    });
+                                }
+                                let low_surrogate = match read_hexa_char(&val[2..]) {
+                                    Ok(cp) => cp,
+                                    Err(e) => {
+                                        error = error.or_else(|| {
+                                            let pos =
+                                                TODO + u64::try_from(next_byte_offset).unwrap();
+                                            Some(self.syntax_error(pos - 6..pos, e))
+                                        });
+                                        char::REPLACEMENT_CHARACTER.into()
+                                    }
+                                };
+                                if !(0xDC00..=0xDFFF).contains(&low_surrogate) {
+                                    error = error.or_else(|| {
+                                        let pos = TODO + u64::try_from(next_byte_offset).unwrap();
+                                        Some(self.syntax_error(
+                                            pos - 6..pos,
+                                            format!(
+                                                "\\u{:X} is not a valid low surrogate",
+                                                low_surrogate
+                                            ),
+                                        ))
+                                    });
+                                }
+                                let code_point = 0x10000
+                                    + ((high_surrogate & 0x03FF) << 10)
+                                    + (low_surrogate & 0x03FF);
+                                if let Some(c) = char::from_u32(code_point) {
+                                    let mut buf = [0; 4];
+                                    output.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                                } else {
+                                    let mut buf = [0; 4];
+                                    output.extend_from_slice(
+                                        char::REPLACEMENT_CHARACTER
+                                            .encode_utf8(&mut buf)
+                                            .as_bytes(),
+                                    );
+                                    error = error.or_else(|| {
+                                        let pos = TODO + u64::try_from(next_byte_offset).unwrap();
+                                        Some(self.syntax_error(
+                                            pos - 12..pos,
+                                            format!(
+                                                "\\u{:X}\\u{:X} is an invalid surrogate pair",
+                                                high_surrogate, low_surrogate
+                                            ),
+                                        ))
+                                    });
+                                }
+                            }
+                        }
+                        c => {
+                            next_byte_offset += 1;
+                            error = error.or_else(|| {
+                                let pos =
+                                    self.file_offset + u64::try_from(next_byte_offset).unwrap();
+                                Some(self.syntax_error(
+                                    pos - 2..pos,
+                                    format!("'\\{}' is not a valid escape sequence", char::from(c)),
+                                ))
+                            });
+                            let mut buf = [0; 4];
+                            output.extend_from_slice(
+                                char::REPLACEMENT_CHARACTER.encode_utf8(&mut buf).as_bytes(),
+                            );
+                        }
+                    }
+                }
+                c @ (0..=0x1F) => {
+                    error = error.or_else(|| {
+                        let pos = TODO + u64::try_from(next_byte_offset).unwrap();
+                        Some(self.syntax_error(
+                            pos..pos + 1,
+                            format!("'{}' is not allowed in JSON strings", char::from(c)),
+                        ))
+                    });
+                    next_byte_offset += 1;
+                }
+                c => {
+                    output.push(c);
+                    next_byte_offset += 1;
+                }
+            }
+        }
+        match error {
+            Some(error) => Err(error),
+            None => Ok(String::from_utf8(output).expect("Already UTF8")),
+        }
     }
 
     fn syntax_error(&self, file_offset: Range<u64>, message: impl Into<String>) -> JsonSyntaxError {
