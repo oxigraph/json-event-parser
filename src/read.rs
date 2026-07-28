@@ -1130,8 +1130,12 @@ impl JsonLexer {
             next_byte_offset += read_digits(&input_buffer[next_byte_offset..], is_ending)?;
         }
         self.file_offset += u64::try_from(next_byte_offset).unwrap();
+        // SAFETY: Every byte consumed above is one of `-`, `+`, `.`, `e`, `E`,
+        // or an ASCII digit, so the token is valid UTF-8.
+        #[allow(unsafe_code)]
+        let number = unsafe { str::from_utf8_unchecked(&input_buffer[..next_byte_offset]) };
         Some(Ok(JsonToken::Number(Cow::Borrowed(
-            str::from_utf8(&input_buffer[..next_byte_offset]).unwrap(),
+            number,
         ))))
     }
 
