@@ -1,7 +1,8 @@
 #![allow(clippy::blocks_in_conditions, clippy::redundant_static_lifetimes)]
 #![cfg(feature = "serde")]
 
-use json_event_parser::{JsonValueSink, JsonValueSource, ReaderJsonParser, WriterJsonSerializer};
+use std::borrow::Cow;
+use json_event_parser::{JsonEvent, JsonValueSink, JsonValueSource, ReaderJsonParser, WriterJsonSerializer};
 use serde::{Deserialize, Serialize};
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -67,6 +68,25 @@ fn source_object() {
     let mut json_reader = ReaderJsonParser::new(demo_json.as_bytes());
     let demo_decoded = DemoStruct::deserialize(JsonValueSource::new(&mut json_reader)).unwrap();
     assert_eq!(demo_input, demo_decoded);
+}
+
+#[test]
+fn part_source_object() {
+    let demo_input = DemoStruct::demo();
+    let demo_json = serde_json::to_string(&demo_input).unwrap();
+    let composed_demo_json = format!("{{\"x\": 1, \"y\": {}, \"z\": 2}}", demo_json);
+
+    let mut json_reader = ReaderJsonParser::new(composed_demo_json.as_bytes());
+    assert_eq!(json_reader.parse_next().unwrap().unwrap(), JsonEvent::StartObject);
+    assert_eq!(json_reader.parse_next().unwrap().unwrap(), JsonEvent::ObjectKey(Cow::Borrowed("x")));
+    assert_eq!(json_reader.parse_next().unwrap().unwrap(), JsonEvent::Number(Cow::Borrowed("1")));
+    assert_eq!(json_reader.parse_next().unwrap().unwrap(), JsonEvent::ObjectKey(Cow::Borrowed("y")));
+    let demo_decoded = DemoStruct::deserialize(JsonValueSource::new(&mut json_reader)).unwrap();
+    assert_eq!(demo_input, demo_decoded);
+    assert_eq!(json_reader.parse_next().unwrap().unwrap(), JsonEvent::ObjectKey(Cow::Borrowed("z")));
+    assert_eq!(json_reader.parse_next().unwrap().unwrap(), JsonEvent::Number(Cow::Borrowed("2")));
+    assert_eq!(json_reader.parse_next().unwrap().unwrap(), JsonEvent::EndObject);
+    assert!(json_reader.parse_next().is_none());
 }
 
 // serde derive expansion code below, for debugging purpose only, do **NOT** edit
