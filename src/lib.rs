@@ -20,11 +20,11 @@ mod write;
 #[cfg(feature = "async-tokio")]
 pub use crate::read::TokioAsyncReaderJsonParser;
 pub use crate::read::{
-    JsonParseError, JsonSyntaxError, LowLevelJsonParser, LowLevelJsonParserResult,
+    owned_event, JsonParseError, JsonSyntaxError, LowLevelJsonParser, LowLevelJsonParserResult,
     ReaderJsonParser, SliceJsonParser, TextPosition,
 };
 #[cfg(feature = "serde")]
-pub use crate::serde::{JsonValueSink, JsonValueSource, JsonEventSource, SerDeIoError};
+pub use crate::serde::{JsonEventSource, JsonValueSink, JsonValueSource, SerDeIoError};
 pub use crate::skipper::{SkipError, Skipper};
 #[cfg(feature = "async-tokio")]
 pub use crate::write::TokioAsyncWriterJsonSerializer;

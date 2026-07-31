@@ -1,9 +1,12 @@
 #![allow(clippy::blocks_in_conditions, clippy::redundant_static_lifetimes)]
 #![cfg(feature = "serde")]
 
-use std::borrow::Cow;
-use json_event_parser::{JsonEvent, JsonValueSink, JsonValueSource, ReaderJsonParser, Skipper, WriterJsonSerializer};
+use json_event_parser::{
+    owned_event, JsonEvent, JsonValueSink, JsonValueSource, ReaderJsonParser, Skipper,
+    WriterJsonSerializer,
+};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 enum DemoEnum {
@@ -77,15 +80,36 @@ fn part_source_object() {
     let composed_demo_json = format!("{{\"x\": 1, \"y\": {}, \"z\": 2}}", demo_json);
 
     let mut json_reader = ReaderJsonParser::new(composed_demo_json.as_bytes());
-    assert_eq!(json_reader.parse_next().unwrap().unwrap(), JsonEvent::StartObject);
-    assert_eq!(json_reader.parse_next().unwrap().unwrap(), JsonEvent::ObjectKey(Cow::Borrowed("x")));
-    assert_eq!(json_reader.parse_next().unwrap().unwrap(), JsonEvent::Number(Cow::Borrowed("1")));
-    assert_eq!(json_reader.parse_next().unwrap().unwrap(), JsonEvent::ObjectKey(Cow::Borrowed("y")));
+    assert_eq!(
+        json_reader.parse_next().unwrap().unwrap(),
+        JsonEvent::StartObject
+    );
+    assert_eq!(
+        json_reader.parse_next().unwrap().unwrap(),
+        JsonEvent::ObjectKey(Cow::Borrowed("x"))
+    );
+    assert_eq!(
+        json_reader.parse_next().unwrap().unwrap(),
+        JsonEvent::Number(Cow::Borrowed("1"))
+    );
+    assert_eq!(
+        json_reader.parse_next().unwrap().unwrap(),
+        JsonEvent::ObjectKey(Cow::Borrowed("y"))
+    );
     let demo_decoded = DemoStruct::deserialize(JsonValueSource::new(&mut json_reader)).unwrap();
     assert_eq!(demo_input, demo_decoded);
-    assert_eq!(json_reader.parse_next().unwrap().unwrap(), JsonEvent::ObjectKey(Cow::Borrowed("z")));
-    assert_eq!(json_reader.parse_next().unwrap().unwrap(), JsonEvent::Number(Cow::Borrowed("2")));
-    assert_eq!(json_reader.parse_next().unwrap().unwrap(), JsonEvent::EndObject);
+    assert_eq!(
+        json_reader.parse_next().unwrap().unwrap(),
+        JsonEvent::ObjectKey(Cow::Borrowed("z"))
+    );
+    assert_eq!(
+        json_reader.parse_next().unwrap().unwrap(),
+        JsonEvent::Number(Cow::Borrowed("2"))
+    );
+    assert_eq!(
+        json_reader.parse_next().unwrap().unwrap(),
+        JsonEvent::EndObject
+    );
     assert!(json_reader.parse_next().is_none());
 }
 
@@ -96,23 +120,46 @@ fn skip_and_consume() {
     let composed_demo_json = format!("{{\"x\": 1, \"y\": {}, \"z\": 2}}", demo_json);
 
     let mut json_reader = ReaderJsonParser::new(composed_demo_json.as_bytes());
-    assert_eq!(json_reader.parse_next().unwrap().unwrap(), JsonEvent::StartObject);
-    assert_eq!(json_reader.parse_next().unwrap().unwrap(), JsonEvent::ObjectKey(Cow::Borrowed("x")));
-    assert_eq!(json_reader.parse_next().unwrap().unwrap(), JsonEvent::Number(Cow::Borrowed("1")));
-    assert_eq!(json_reader.parse_next().unwrap().unwrap(), JsonEvent::ObjectKey(Cow::Borrowed("y")));
-    
+    assert_eq!(
+        json_reader.parse_next().unwrap().unwrap(),
+        JsonEvent::StartObject
+    );
+    assert_eq!(
+        json_reader.parse_next().unwrap().unwrap(),
+        JsonEvent::ObjectKey(Cow::Borrowed("x"))
+    );
+    assert_eq!(
+        json_reader.parse_next().unwrap().unwrap(),
+        JsonEvent::Number(Cow::Borrowed("1"))
+    );
+    assert_eq!(
+        json_reader.parse_next().unwrap().unwrap(),
+        JsonEvent::ObjectKey(Cow::Borrowed("y"))
+    );
+
     let mut events = Vec::<JsonEvent<'static>>::new();
-    let mut skipper = Skipper::new(&mut events);
+    let mut skipper = Skipper::new();
     while skipper.skipping() {
-        skipper.on_event(&json_reader.parse_next().unwrap().unwrap()).unwrap();
+        let event = json_reader.parse_next().unwrap().unwrap();
+        skipper.on_event(&event).unwrap();
+        events.push(owned_event(event.clone()));
     }
-    
+
     let demo_decoded = DemoStruct::deserialize(JsonValueSource::new(&mut events)).unwrap();
-    
+
     assert_eq!(demo_input, demo_decoded);
-    assert_eq!(json_reader.parse_next().unwrap().unwrap(), JsonEvent::ObjectKey(Cow::Borrowed("z")));
-    assert_eq!(json_reader.parse_next().unwrap().unwrap(), JsonEvent::Number(Cow::Borrowed("2")));
-    assert_eq!(json_reader.parse_next().unwrap().unwrap(), JsonEvent::EndObject);
+    assert_eq!(
+        json_reader.parse_next().unwrap().unwrap(),
+        JsonEvent::ObjectKey(Cow::Borrowed("z"))
+    );
+    assert_eq!(
+        json_reader.parse_next().unwrap().unwrap(),
+        JsonEvent::Number(Cow::Borrowed("2"))
+    );
+    assert_eq!(
+        json_reader.parse_next().unwrap().unwrap(),
+        JsonEvent::EndObject
+    );
     assert!(json_reader.parse_next().is_none());
 }
 

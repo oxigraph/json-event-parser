@@ -1,7 +1,6 @@
 use crate::JsonEvent;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
-use crate::read::owned_event;
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum SkipError {
@@ -23,49 +22,25 @@ impl Display for SkipError {
 
 impl Error for SkipError {}
 
-pub trait SkipRecorder {
-    fn on_event(&mut self, event: &JsonEvent<'_>);
-}
-
-impl SkipRecorder for () {
-    fn on_event(&mut self, _event: &JsonEvent<'_>) {}
-}
-
-impl SkipRecorder for &mut Vec<JsonEvent<'static>> {
-    fn on_event(&mut self, event: &JsonEvent<'_>) {
-        self.push(owned_event(event.clone()));
-    }
-}
-
-pub struct Skipper<R = ()>
-where
-    R: SkipRecorder,
-{
+#[derive(Copy, Clone)]
+pub struct Skipper {
     has_skipped_value: bool,
     depth: usize,
-    recorder: R,
 }
 
-impl<R> Default for Skipper<R>
-where
-    R: Default + SkipRecorder,
-{
+impl Default for Skipper {
     #[inline]
     fn default() -> Self {
-        Skipper::new(R::default())
+        Skipper::new()
     }
 }
 
-impl<R> Skipper<R>
-where
-    R: SkipRecorder,
-{
+impl Skipper {
     #[inline]
-    pub const fn new(recorder: R) -> Self {
+    pub const fn new() -> Self {
         Self {
             has_skipped_value: false,
             depth: 0,
-            recorder,
         }
     }
 
@@ -108,8 +83,6 @@ where
             }
         }
 
-        self.recorder.on_event(event);
-
         Ok(self.skipping())
     }
 }
@@ -130,7 +103,7 @@ mod test {
         }
 
         let mut reader = ReaderJsonParser::new(json.as_bytes());
-        let mut skipper = Skipper::<()>::default();
+        let mut skipper = Skipper::new();
         let mut state = State::WaitScope;
         let mut y: Option<String> = None;
 

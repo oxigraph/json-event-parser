@@ -787,7 +787,7 @@ mod de {
         where
             V: Visitor<'de>,
         {
-            let mut skipper = Skipper::<()>::default();
+            let mut skipper = Skipper::new();
             while skipper.skipping() {
                 skipper
                     .on_event(&self.next_event()?)
