@@ -12,6 +12,8 @@
 )]
 
 mod read;
+#[cfg(feature = "serde")]
+mod serde;
 mod skipper;
 mod write;
 
@@ -21,7 +23,9 @@ pub use crate::read::{
     JsonParseError, JsonSyntaxError, LowLevelJsonParser, LowLevelJsonParserResult,
     ReaderJsonParser, SliceJsonParser, TextPosition,
 };
-pub use crate::skipper::{Skipper, SkipError};
+#[cfg(feature = "serde")]
+pub use crate::serde::{JsonValueSink, JsonValueSource, SerDeIoError};
+pub use crate::skipper::{SkipError, Skipper};
 #[cfg(feature = "async-tokio")]
 pub use crate::write::TokioAsyncWriterJsonSerializer;
 pub use crate::write::{LowLevelJsonSerializer, WriterJsonSerializer};
