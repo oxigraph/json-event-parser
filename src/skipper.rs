@@ -24,16 +24,16 @@ impl Display for SkipError {
 impl Error for SkipError {}
 
 pub trait SkipRecorder {
-    fn on_event(&mut self, event: JsonEvent<'static>);
+    fn on_event(&mut self, event: &JsonEvent<'_>);
 }
 
 impl SkipRecorder for () {
-    fn on_event(&mut self, _event: JsonEvent<'static>) {}
+    fn on_event(&mut self, _event: &JsonEvent<'_>) {}
 }
 
 impl SkipRecorder for &mut Vec<JsonEvent<'static>> {
-    fn on_event(&mut self, event: JsonEvent<'static>) {
-        self.push(event);
+    fn on_event(&mut self, event: &JsonEvent<'_>) {
+        self.push(owned_event(event.clone()));
     }
 }
 
@@ -108,7 +108,7 @@ where
             }
         }
 
-        self.recorder.on_event(owned_event(event.clone()));
+        self.recorder.on_event(event);
 
         Ok(self.skipping())
     }
