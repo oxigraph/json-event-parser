@@ -344,9 +344,14 @@ mod ser {
         where
             T: ?Sized + Serialize,
         {
-            let key = serde_json::to_string(key).map_err(|err| {
-                SerDeIoError::custom(format!("convert key to value error: {:#?}", err))
-            })?;
+            let key = {
+                let mut key_buf = Vec::<u8>::new();
+                let mut key_json_writer = WriterJsonSerializer::new(&mut key_buf);
+                key.serialize(JsonValueSink::new(&mut key_json_writer))?;
+                String::from_utf8(key_buf)
+                    .map_err(|_| SerDeIoError::custom("can't encode json key to string"))?
+            };
+
             self.writer
                 .serialize_event(JsonEvent::ObjectKey(Cow::Owned(key)))?;
             Ok(())
@@ -994,4 +999,3 @@ mod de {
         )
     }
 }
-

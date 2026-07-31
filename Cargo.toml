@@ -17,11 +17,10 @@ exclude = ["JSONTestSuite"]
 
 [features]
 async-tokio = ["dep:tokio"]
-serde = ["dep:serde", "dep:serde_json"]
+serde = ["dep:serde"]
 
 [dependencies]
 serde = { version = "1", optional = true }
-serde_json = { version = "1", optional = true }
 tokio = { version = "1.29", optional = true, features = ["io-util"] }
 
 [dev-dependencies]
@@ -29,6 +28,7 @@ codspeed-criterion-compat = ">=4,<6"
 tokio = { version = "1.29", features = ["rt", "macros"] }
 clap = "4"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [[bench]]
 name = "parser"
