@@ -1,7 +1,9 @@
-use std::error::Error;
-use std::fmt::{Display, Formatter};
+use std::{
+    error::Error,
+    fmt::{Display, Formatter},
+};
 
-pub use de::JsonValueSource;
+pub use de::{JsonEventSource, JsonValueSource};
 pub use ser::JsonValueSink;
 use serde::{de::Error as DeError, ser::Error as SerError};
 
@@ -404,31 +406,51 @@ mod ser {
 }
 
 mod de {
+    use crate::read::owned_event;
     use crate::serde::SerDeIoError;
-    use crate::{JsonEvent, ReaderJsonParser, Skipper};
+    use crate::{JsonEvent, JsonParseError, ReaderJsonParser, Skipper};
     use serde::de::value::StrDeserializer;
     use serde::de::{DeserializeSeed, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor};
     use serde::{Deserialize, Deserializer};
-    use std::borrow::{Borrow, Cow};
     use std::fmt::{Display, Formatter};
     use std::io::Read;
     use std::marker::PhantomData;
     use std::num::IntErrorKind;
     use std::str::FromStr;
 
-    pub struct JsonValueSource<'a, R: Read> {
-        reader: &'a mut ReaderJsonParser<R>,
+    pub trait JsonEventSource {
+        fn next_event(&mut self) -> Option<Result<JsonEvent<'_>, JsonParseError>>;
+    }
+
+    impl<R: Read> JsonEventSource for ReaderJsonParser<R> {
+        fn next_event(&mut self) -> Option<Result<JsonEvent<'_>, JsonParseError>> {
+            self.parse_next()
+        }
+    }
+
+    impl JsonEventSource for Vec<JsonEvent<'_>> {
+        fn next_event(&mut self) -> Option<Result<JsonEvent<'_>, JsonParseError>> {
+            if self.is_empty() {
+                None
+            } else {
+                Some(Ok(self.remove(0)))
+            }
+        }
+    }
+
+    pub struct JsonValueSource<'a, S: JsonEventSource> {
+        source: &'a mut S,
         peek: Option<JsonEvent<'static>>,
     }
 
-    impl<'a, R: Read> JsonValueSource<'a, R> {
-        pub fn new(reader: &'a mut ReaderJsonParser<R>) -> Self {
-            Self { reader, peek: None }
+    impl<'a, S: JsonEventSource> JsonValueSource<'a, S> {
+        pub fn new(source: &'a mut S) -> Self {
+            Self { source, peek: None }
         }
 
         fn with_peek(self, event: JsonEvent<'static>) -> Self {
             Self {
-                reader: self.reader,
+                source: self.source,
                 peek: Some(event),
             }
         }
@@ -446,8 +468,8 @@ mod de {
                 return Ok(event);
             }
 
-            self.reader
-                .parse_next()
+            self.source
+                .next_event()
                 .ok_or_else(|| SerDeIoError::new(std::io::ErrorKind::UnexpectedEof, "eof"))?
                 .map_err(SerDeIoError::custom)
         }
@@ -457,8 +479,8 @@ mod de {
                 return Ok(event);
             }
 
-            self.reader
-                .parse_next()
+            self.source
+                .next_event()
                 .ok_or_else(|| SerDeIoError::new(std::io::ErrorKind::UnexpectedEof, "eof"))?
                 .map_err(SerDeIoError::custom)
         }
@@ -468,7 +490,7 @@ mod de {
                 return Ok(event);
             }
 
-            self.next_event().map(event_to_static)
+            self.next_event().map(owned_event)
         }
 
         fn consume_byte_buf(&mut self, buf: &mut Vec<u8>) -> Result<(), SerDeIoError> {
@@ -519,7 +541,7 @@ mod de {
         };
     }
 
-    impl<'a, 'de: 'a, R: Read> Deserializer<'de> for JsonValueSource<'a, R> {
+    impl<'a, 'de: 'a, S: JsonEventSource> Deserializer<'de> for JsonValueSource<'a, S> {
         type Error = SerDeIoError;
 
         fn deserialize_any<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
@@ -765,7 +787,7 @@ mod de {
         where
             V: Visitor<'de>,
         {
-            let mut skipper = Skipper::new();
+            let mut skipper = Skipper::<()>::default();
             while skipper.skipping() {
                 skipper
                     .on_event(&self.next_event()?)
@@ -775,13 +797,13 @@ mod de {
         }
     }
 
-    struct JsonVariantAccess<'a, R: Read> {
+    struct JsonVariantAccess<'a, S: JsonEventSource> {
         is_unit: bool,
         peek: Option<JsonEvent<'static>>,
-        source: JsonValueSource<'a, R>,
+        source: JsonValueSource<'a, S>,
     }
 
-    impl<'a, 'de: 'a, R: Read> EnumAccess<'de> for JsonVariantAccess<'a, R> {
+    impl<'a, 'de: 'a, S: JsonEventSource> EnumAccess<'de> for JsonVariantAccess<'a, S> {
         type Error = SerDeIoError;
         type Variant = Self;
 
@@ -791,12 +813,12 @@ mod de {
         {
             let peek = self.peek.take();
             let val =
-                seed.deserialize(JsonValueSource::new(self.source.reader).with_opt_peek(peek))?;
+                seed.deserialize(JsonValueSource::new(self.source.source).with_opt_peek(peek))?;
             Ok((val, self))
         }
     }
 
-    impl<'a, 'de: 'a, R: Read> VariantAccess<'de> for JsonVariantAccess<'a, R> {
+    impl<'a, 'de: 'a, S: JsonEventSource> VariantAccess<'de> for JsonVariantAccess<'a, S> {
         type Error = SerDeIoError;
 
         fn unit_variant(self) -> Result<(), Self::Error> {
@@ -850,14 +872,14 @@ mod de {
         }
     }
 
-    impl<'a, 'de: 'a, R: Read> MapAccess<'de> for JsonValueSource<'a, R> {
+    impl<'a, 'de: 'a, S: JsonEventSource> MapAccess<'de> for JsonValueSource<'a, S> {
         type Error = SerDeIoError;
 
         fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>, Self::Error>
         where
             K: DeserializeSeed<'de>,
         {
-            let Some(event) = self.reader.parse_next() else {
+            let Some(event) = self.source.next_event() else {
                 return Err(SerDeIoError::new(std::io::ErrorKind::UnexpectedEof, "EOF"));
             };
             let event = event.map_err(SerDeIoError::custom)?;
@@ -877,11 +899,11 @@ mod de {
         where
             V: DeserializeSeed<'de>,
         {
-            seed.deserialize(JsonValueSource::new(self.reader))
+            seed.deserialize(JsonValueSource::new(self.source))
         }
     }
 
-    impl<'a, 'de: 'a, R: Read> SeqAccess<'de> for JsonValueSource<'a, R> {
+    impl<'a, 'de: 'a, S: JsonEventSource> SeqAccess<'de> for JsonValueSource<'a, S> {
         type Error = SerDeIoError;
 
         fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
@@ -891,7 +913,7 @@ mod de {
             match self.next_event_static()? {
                 JsonEvent::EndArray => Ok(None),
                 event => seed
-                    .deserialize(JsonValueSource::new(self.reader).with_peek(event))
+                    .deserialize(JsonValueSource::new(self.source).with_peek(event))
                     .map(Some),
             }
         }
@@ -941,20 +963,6 @@ mod de {
                 JsonNumber::U64(v) => visitor.visit_u64(v),
                 JsonNumber::F64(v) => visitor.visit_f64(v),
             }
-        }
-    }
-
-    fn event_to_static<'a, V: Borrow<JsonEvent<'a>>>(event: V) -> JsonEvent<'static> {
-        match event.borrow() {
-            JsonEvent::String(v) => JsonEvent::String(Cow::Owned(v.to_string())),
-            JsonEvent::Number(v) => JsonEvent::Number(Cow::Owned(v.to_string())),
-            JsonEvent::Boolean(v) => JsonEvent::Boolean(*v),
-            JsonEvent::Null => JsonEvent::Null,
-            JsonEvent::StartArray => JsonEvent::StartArray,
-            JsonEvent::EndArray => JsonEvent::EndArray,
-            JsonEvent::StartObject => JsonEvent::StartObject,
-            JsonEvent::EndObject => JsonEvent::EndObject,
-            JsonEvent::ObjectKey(k) => JsonEvent::ObjectKey(Cow::Owned(k.to_string())),
         }
     }
 

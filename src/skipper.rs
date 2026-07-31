@@ -1,11 +1,13 @@
 use crate::JsonEvent;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
+use crate::read::owned_event;
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum SkipError {
     SkipAlreadyDone,
     StackEmpty,
+    NestedObjectKey,
 }
 
 impl Display for SkipError {
@@ -14,31 +16,56 @@ impl Display for SkipError {
         match self {
             SkipError::SkipAlreadyDone => write!(f, "Skip already done"),
             SkipError::StackEmpty => write!(f, "Stack is empty (trying to skip after done?)"),
+            SkipError::NestedObjectKey => write!(f, "Nested object key"),
         }
     }
 }
 
 impl Error for SkipError {}
 
-#[derive(Copy, Clone)]
-pub struct Skipper {
-    has_skipped_value: bool,
-    depth: usize,
+pub trait SkipRecorder {
+    fn on_event(&mut self, event: JsonEvent<'static>);
 }
 
-impl Default for Skipper {
-    #[inline]
-    fn default() -> Self {
-        Self::new()
+impl SkipRecorder for () {
+    fn on_event(&mut self, _event: JsonEvent<'static>) {}
+}
+
+impl SkipRecorder for &mut Vec<JsonEvent<'static>> {
+    fn on_event(&mut self, event: JsonEvent<'static>) {
+        self.push(event);
     }
 }
 
-impl Skipper {
+pub struct Skipper<R = ()>
+where
+    R: SkipRecorder,
+{
+    has_skipped_value: bool,
+    depth: usize,
+    recorder: R,
+}
+
+impl<R> Default for Skipper<R>
+where
+    R: Default + SkipRecorder,
+{
     #[inline]
-    pub const fn new() -> Self {
+    fn default() -> Self {
+        Skipper::new(R::default())
+    }
+}
+
+impl<R> Skipper<R>
+where
+    R: SkipRecorder,
+{
+    #[inline]
+    pub const fn new(recorder: R) -> Self {
         Self {
             has_skipped_value: false,
             depth: 0,
+            recorder,
         }
     }
 
@@ -72,12 +99,16 @@ impl Skipper {
                 if self.depth == 0 {
                     return Err(SkipError::StackEmpty);
                 }
-                self.depth = self.depth - 1;
+                self.depth -= 1;
             }
             JsonEvent::ObjectKey(_) => {
-                // value key, do nothing
+                if self.depth == 0 {
+                    return Err(SkipError::NestedObjectKey);
+                }
             }
         }
+
+        self.recorder.on_event(owned_event(event.clone()));
 
         Ok(self.skipping())
     }
@@ -99,7 +130,7 @@ mod test {
         }
 
         let mut reader = ReaderJsonParser::new(json.as_bytes());
-        let mut skipper = Skipper::new();
+        let mut skipper = Skipper::<()>::default();
         let mut state = State::WaitScope;
         let mut y: Option<String> = None;
 

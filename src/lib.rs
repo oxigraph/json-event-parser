@@ -24,7 +24,7 @@ pub use crate::read::{
     ReaderJsonParser, SliceJsonParser, TextPosition,
 };
 #[cfg(feature = "serde")]
-pub use crate::serde::{JsonValueSink, JsonValueSource, SerDeIoError};
+pub use crate::serde::{JsonValueSink, JsonValueSource, JsonEventSource, SerDeIoError};
 pub use crate::skipper::{SkipError, Skipper};
 #[cfg(feature = "async-tokio")]
 pub use crate::write::TokioAsyncWriterJsonSerializer;

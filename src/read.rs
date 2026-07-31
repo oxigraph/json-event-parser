@@ -1203,7 +1203,7 @@ fn read_digits(input_buffer: &[u8], is_ending: bool) -> Option<usize> {
 }
 
 #[inline]
-fn owned_event(event: JsonEvent<'_>) -> JsonEvent<'static> {
+pub(crate) fn owned_event(event: JsonEvent<'_>) -> JsonEvent<'static> {
     match event {
         JsonEvent::String(s) => JsonEvent::String(s.into_owned().into()),
         JsonEvent::Number(n) => JsonEvent::Number(n.into_owned().into()),
