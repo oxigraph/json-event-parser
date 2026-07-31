@@ -12,6 +12,7 @@
 )]
 
 mod read;
+mod skipper;
 mod write;
 
 #[cfg(feature = "async-tokio")]
@@ -20,6 +21,7 @@ pub use crate::read::{
     JsonParseError, JsonSyntaxError, LowLevelJsonParser, LowLevelJsonParserResult,
     ReaderJsonParser, SliceJsonParser, TextPosition,
 };
+pub use crate::skipper::{Skipper, SkipError};
 #[cfg(feature = "async-tokio")]
 pub use crate::write::TokioAsyncWriterJsonSerializer;
 pub use crate::write::{LowLevelJsonSerializer, WriterJsonSerializer};
