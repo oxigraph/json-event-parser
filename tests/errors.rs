@@ -56,7 +56,7 @@ fn test_error_messages() {
     for (json, error) in entries {
         assert_eq!(
             SliceJsonParser::new(json)
-                .parse_next()
+                .next()
                 .unwrap()
                 .unwrap_err()
                 .to_string(),
