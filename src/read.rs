@@ -292,24 +292,15 @@ impl BufferJsonParser {
 /// use json_event_parser::{JsonEvent, SliceJsonParser};
 /// use std::borrow::Cow;
 ///
-/// let mut reader = SliceJsonParser::new(b"{\"foo\": 1}");
-/// assert!(matches!(
-///     reader.parse_next(),
-///     Some(Ok(JsonEvent::StartObject))
-/// ));
-/// assert!(matches!(
-///     reader.parse_next(),
-///     Some(Ok(JsonEvent::ObjectKey(Cow::Borrowed("foo"))))
-/// ));
-/// assert!(matches!(
-///     reader.parse_next(),
-///     Some(Ok(JsonEvent::Number(Cow::Borrowed("1"))))
-/// ));
-/// assert!(matches!(
-///     reader.parse_next(),
-///     Some(Ok(JsonEvent::EndObject))
-/// ));
-/// assert!(matches!(reader.parse_next(), None));
+/// assert_eq!(
+///     SliceJsonParser::new(b"{\"foo\": 1}").collect::<Result<Vec<_>, _>>()?,
+///     vec![
+///         JsonEvent::StartObject,
+///         JsonEvent::ObjectKey(Cow::Borrowed("foo")),
+///         JsonEvent::Number(Cow::Borrowed("1")),
+///         JsonEvent::EndObject
+///     ]
+/// );
 /// # std::io::Result::Ok(())
 /// ```
 pub struct SliceJsonParser<'a> {
@@ -325,23 +316,18 @@ impl<'a> SliceJsonParser<'a> {
             parser: LowLevelJsonParser::new(),
         }
     }
-
-    #[inline]
-    pub fn parse_next(&mut self) -> Option<Result<JsonEvent<'a>, JsonSyntaxError>> {
-        let LowLevelJsonParserResult {
-            event,
-            consumed_bytes,
-        } = self.parser.parse_next(self.input_buffer, true);
-        self.input_buffer = &self.input_buffer[consumed_bytes..];
-        event
-    }
 }
 
 impl<'a> Iterator for SliceJsonParser<'a> {
     type Item = Result<JsonEvent<'a>, JsonSyntaxError>;
 
     fn next(&mut self) -> Option<Result<JsonEvent<'a>, JsonSyntaxError>> {
-        self.parse_next()
+        let LowLevelJsonParserResult {
+            event,
+            consumed_bytes,
+        } = self.parser.parse_next(self.input_buffer, true);
+        self.input_buffer = &self.input_buffer[consumed_bytes..];
+        event
     }
 }
 
