@@ -45,6 +45,8 @@ assert_eq!(writer.finish()?.as_slice(), b"{\"foo\":1}");
 # std::io::Result::Ok(())
 ```
 
+See [`json-event-parser-blocks`](https://github.com/afpro/json-event-parser-blocks) for an implementation of `serde` on top of this crate (note that is project is not affiliated or endorsed by Oxigraph in any way).
+
 ## License
 
 This project is licensed under either of
