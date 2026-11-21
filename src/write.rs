@@ -96,7 +96,7 @@ impl<W: AsyncWrite + Unpin> TokioAsyncWriterJsonSerializer<W> {
             Ok(())
         } else {
             // A previous write fail, we fail
-             Err(Error::other(
+            Err(Error::other(
                 "A previous write operation failed, the output state is now undefined",
             ))
         }

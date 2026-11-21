@@ -777,27 +777,17 @@ impl JsonLexer {
                     let result = Some(if let Some(error) = error {
                         Err(error)
                     } else if let Some((mut string, read_until)) = string {
-                        if read_until < next_byte_offset {
-                            let (str, e) = self.decode_utf8(
-                                &input_buffer[read_until..next_byte_offset],
-                                self.file_offset + u64::try_from(read_until).unwrap(),
-                            );
-                            error = error.or(e);
-                            string.push_str(&str);
-                        }
-                        if let Some(error) = error {
-                            Err(error)
-                        } else {
-                            Ok(JsonToken::String(Cow::Owned(string)))
-                        }
+                        self.decode_utf8(
+                            &input_buffer[read_until..next_byte_offset],
+                            self.file_offset + u64::try_from(read_until).unwrap(),
+                        )
+                        .map(|tail| {
+                            string.push_str(tail);
+                            JsonToken::String(Cow::Owned(string))
+                        })
                     } else {
-                        let (string, error) = self
-                            .decode_utf8(&input_buffer[1..next_byte_offset], self.file_offset + 1);
-                        if let Some(error) = error {
-                            Err(error)
-                        } else {
-                            Ok(JsonToken::String(string))
-                        }
+                        self.decode_utf8(&input_buffer[1..next_byte_offset], self.file_offset + 1)
+                            .map(|string| JsonToken::String(Cow::Borrowed(string)))
                     });
                     self.file_offset += u64::try_from(next_byte_offset).unwrap() + 1;
                     return result;
@@ -808,13 +798,14 @@ impl JsonLexer {
                         string = Some((String::new(), 1))
                     }
                     let (string, read_until) = string.as_mut().unwrap();
-                    if *read_until < next_byte_offset {
-                        let (str, e) = self.decode_utf8(
+                    if error.is_none() && *read_until < next_byte_offset {
+                        match self.decode_utf8(
                             &input_buffer[*read_until..next_byte_offset],
                             self.file_offset + u64::try_from(*read_until).unwrap(),
-                        );
-                        error = error.or(e);
-                        string.push_str(&str);
+                        ) {
+                            Ok(part) => string.push_str(part),
+                            Err(e) => error = Some(e),
+                        }
                     }
                     next_byte_offset += 1;
                     match *input_buffer.get(next_byte_offset)? {
@@ -1104,17 +1095,11 @@ impl JsonLexer {
         &self,
         input_buffer: &'a [u8],
         start_position: u64,
-    ) -> (Cow<'a, str>, Option<JsonSyntaxError>) {
-        match str::from_utf8(input_buffer) {
-            Ok(str) => (Cow::Borrowed(str), None),
-            Err(e) => (
-                String::from_utf8_lossy(input_buffer),
-                Some({
-                    let pos = start_position + u64::try_from(e.valid_up_to()).unwrap();
-                    self.syntax_error(pos..pos + 1, format!("Invalid UTF-8: {e}"))
-                }),
-            ),
-        }
+    ) -> Result<&'a str, JsonSyntaxError> {
+        str::from_utf8(input_buffer).map_err(|e| {
+            let pos = start_position + u64::try_from(e.valid_up_to()).unwrap();
+            self.syntax_error(pos..pos + 1, format!("Invalid UTF-8: {e}"))
+        })
     }
 
     fn syntax_error(&self, file_offset: Range<u64>, message: impl Into<String>) -> JsonSyntaxError {
