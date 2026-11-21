@@ -78,6 +78,7 @@ impl<W: AsyncWrite + Unpin> TokioAsyncWriterJsonSerializer<W> {
     }
 
     pub async fn serialize_event(&mut self, event: JsonEvent<'_>) -> Result<()> {
+        self.check_for_failed_write()?;
         self.writer.serialize_event(event, &mut self.buffer)?;
         self.write.write_all(&self.buffer).await?;
         self.buffer.clear();
@@ -85,8 +86,20 @@ impl<W: AsyncWrite + Unpin> TokioAsyncWriterJsonSerializer<W> {
     }
 
     pub fn finish(self) -> Result<W> {
+        self.check_for_failed_write()?;
         self.writer.validate_eof()?;
         Ok(self.write)
+    }
+
+    fn check_for_failed_write(&self) -> Result<()> {
+        if self.buffer.is_empty() {
+            Ok(())
+        } else {
+            // A previous write fail, we fail
+             Err(Error::other(
+                "A previous write operation failed, the output state is now undefined",
+            ))
+        }
     }
 }
 
