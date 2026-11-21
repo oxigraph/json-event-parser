@@ -53,7 +53,10 @@ impl<R: Read> ReaderJsonParser<R> {
         }
     }
 
-    /// Sets the max size of the internal buffer in bytes
+    /// Sets the maximum number of bytes available to parse a token.
+    ///
+    /// The default is 16 MiB. Some tokens, such as numbers, need an extra byte
+    /// of buffer space to check for a delimiter or the end of input.
     #[inline]
     pub fn with_max_buffer_size(mut self, size: usize) -> Self {
         self.parser.max_buffer_size = size;
@@ -128,7 +131,10 @@ impl<R: AsyncRead + Unpin> TokioAsyncReaderJsonParser<R> {
         }
     }
 
-    /// Sets the max size of the internal buffer in bytes
+    /// Sets the maximum number of bytes available to parse a token.
+    ///
+    /// The default is 16 MiB. Some tokens, such as numbers, need an extra byte
+    /// of buffer space to check for a delimiter or the end of input.
     #[inline]
     pub fn with_max_buffer_size(mut self, size: usize) -> Self {
         self.parser.max_buffer_size = size;
@@ -199,13 +205,7 @@ impl BufferJsonParser {
 
     #[inline]
     fn extend_from_reader(&mut self, read: &mut impl Read) -> io::Result<()> {
-        self.prepare_buffer_for_read()?;
-
-        // Read data from the reader into the buffer from the
-        // lower bound until the end
-        let bytes_read = read.read(&mut self.input_buffer[self.input_buffer_end..])?;
-        // Shrink the data to the length of the data read
-        // minus any padding 0s present from the previous resize
+        let bytes_read = read.read(self.prepare_buffer_for_read()?)?;
         self.input_buffer_end += bytes_read;
         self.is_ending = bytes_read == 0;
         Ok(())
@@ -217,24 +217,16 @@ impl BufferJsonParser {
         &mut self,
         read: &mut (impl AsyncRead + Unpin),
     ) -> io::Result<()> {
-        self.prepare_buffer_for_read()?;
-
-        // Read data from the reader into the buffer from the
-        // lower bound until the end
-        let bytes_read = read
-            .read(&mut self.input_buffer[self.input_buffer_end..])
-            .await?;
-        // Shrink the data to the length of the data read
-        // minus any padding 0s present from the previous resize
+        let bytes_read = read.read(self.prepare_buffer_for_read()?).await?;
         self.input_buffer_end += bytes_read;
         self.is_ending = bytes_read == 0;
         Ok(())
     }
 
-    fn prepare_buffer_for_read(&mut self) -> io::Result<()> {
+    fn prepare_buffer_for_read(&mut self) -> io::Result<&mut [u8]> {
         self.shift_input_buffer();
 
-        if self.input_buffer.len() >= self.max_buffer_size {
+        if self.input_buffer_end >= self.max_buffer_size {
             return Err(io::Error::new(
                 io::ErrorKind::OutOfMemory,
                 format!(
@@ -244,35 +236,21 @@ impl BufferJsonParser {
             ));
         }
 
-        let upper_bound = self.resized_buffer_len();
-        // Fill the buffer until the upper bound with 0s
-        if self.input_buffer.len() < upper_bound {
-            self.input_buffer.resize(upper_bound, 0);
-
-            // We keep extending to have as much space as available without reallocation
-            if self.input_buffer.len() < self.input_buffer.capacity() {
-                self.input_buffer.resize(self.input_buffer.capacity(), 0);
-            }
+        if self.input_buffer_end == self.input_buffer.len() {
+            let new_len = min(
+                self.max_buffer_size,
+                max(
+                    self.input_buffer_end + MIN_BUFFER_SIZE,
+                    self.input_buffer_end.saturating_mul(2),
+                ),
+            );
+            self.input_buffer
+                .reserve_exact(new_len - self.input_buffer.len());
+            self.input_buffer.resize(new_len, 0);
         }
 
-        Ok(())
-    }
-
-    // Return the new size for a buffer which exponentially grows in size
-    fn resized_buffer_len(&self) -> usize {
-        // Each one of these expressions will at least double the
-        // size of the buffer, but in such a way that will not
-        // exceed the maximum buffer size or allocate under the minimum buffer size.
-        min(
-            self.max_buffer_size,
-            // We take the max here to ensure that
-            // the buffer always has at least the size of the
-            // data plus the minimum buffer size
-            max(
-                self.input_buffer_end + MIN_BUFFER_SIZE,
-                self.input_buffer_end.saturating_mul(2),
-            ),
-        )
+        let end = min(self.input_buffer.len(), self.max_buffer_size);
+        Ok(&mut self.input_buffer[self.input_buffer_end..end])
     }
 
     fn shift_input_buffer(&mut self) {
