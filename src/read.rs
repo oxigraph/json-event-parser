@@ -1144,11 +1144,11 @@ impl JsonLexer {
         JsonSyntaxError {
             location: TextPosition {
                 line: self.file_line,
-                column: start_file_offset - self.file_start_of_last_line, // TODO: unicode
+                column: start_file_offset - self.file_start_of_last_line,
                 offset: start_file_offset,
             }..TextPosition {
                 line: self.file_line,
-                column: file_offset.end - self.file_start_of_last_line, // TODO: unicode
+                column: file_offset.end - self.file_start_of_last_line,
                 offset: file_offset.end,
             },
             message: message.into(),
@@ -1212,7 +1212,7 @@ pub struct LowLevelJsonParserResult<'a> {
     pub event: Option<Result<JsonEvent<'a>, JsonSyntaxError>>,
 }
 
-/// A position in a text i.e. a `line` number starting from 0, a `column` number starting from 0 (in number of code points) and a global file `offset` starting from 0 (in number of bytes).
+/// A position in a text i.e. a `line` number starting from 0, a `column` number starting from 0 (in number of bytes) and a global file `offset` starting from 0 (in number of bytes).
 #[derive(Eq, PartialEq, Debug, Clone, Copy)]
 pub struct TextPosition {
     pub line: u64,

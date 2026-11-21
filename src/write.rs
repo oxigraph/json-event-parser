@@ -92,7 +92,7 @@ impl<W: AsyncWrite + Unpin> TokioAsyncWriterJsonSerializer<W> {
 
 /// A low-level JSON streaming writer writing to a [`Write`] implementation.
 ///
-/// YOu probably want to use [`WriterJsonSerializer`] instead.
+/// You probably want to use [`WriterJsonSerializer`] instead.
 ///
 /// ```
 /// use json_event_parser::{JsonEvent, LowLevelJsonSerializer};
