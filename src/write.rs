@@ -183,8 +183,8 @@ impl LowLevelJsonSerializer {
                 )),
             },
             JsonEvent::ObjectKey(key) => {
-                match self.state_stack.pop() {
-                    Some(JsonState::OpenObject) => (),
+                match self.state_stack.last_mut() {
+                    Some(state @ JsonState::OpenObject) => *state = JsonState::ContinuationObject,
                     Some(JsonState::ContinuationObject) => write.write_all(b",")?,
                     _ => {
                         return Err(Error::new(
@@ -193,7 +193,6 @@ impl LowLevelJsonSerializer {
                         ))
                     }
                 }
-                self.state_stack.push(JsonState::ContinuationObject);
                 self.state_stack.push(JsonState::ObjectValue);
                 write_escaped_json_string(&key, &mut write)?;
                 write.write_all(b":")
