@@ -391,7 +391,9 @@ impl LowLevelJsonParser {
         }
     }
 
-    /// Maximal allowed number of nested object and array openings. Infinite by default.
+    /// Maximum number of simultaneously open arrays and objects, including the root.
+    ///
+    /// The default is 65,536. A limit of zero allows only scalar values.
     #[inline]
     pub fn with_max_stack_size(mut self, size: usize) -> Self {
         self.max_state_stack_size = size;
@@ -452,20 +454,21 @@ impl LowLevelJsonParser {
                 }
             }
         }
+        let consumed_bytes = (self.lexer.file_offset - start_file_offset)
+            .try_into()
+            .unwrap();
         LowLevelJsonParserResult {
-            consumed_bytes: (self.lexer.file_offset - start_file_offset)
-                .try_into()
-                .unwrap(),
+            consumed_bytes,
             event: if is_ending
                 && !self.raised_unexpected_eof
                 && (!self.element_read
                     || !self.state_stack.is_empty()
-                    || usize::try_from(self.lexer.file_offset - start_file_offset).unwrap()
-                        < input_buffer.len())
+                    || consumed_bytes < input_buffer.len())
             {
                 self.raised_unexpected_eof = true;
+                let offset = self.lexer.file_offset;
                 Some(Err(self.lexer.syntax_error(
-                    self.lexer.file_offset..self.lexer.file_offset + 1,
+                    offset..offset + u64::from(consumed_bytes < input_buffer.len()),
                     "Unexpected end of file",
                 )))
             } else {
@@ -606,7 +609,7 @@ impl LowLevelJsonParser {
 
     #[inline]
     fn check_stack_size(&self) -> Result<(), String> {
-        if self.state_stack.len() > self.max_state_stack_size {
+        if self.state_stack.len() >= self.max_state_stack_size {
             Err(format!(
                 "Max stack size of {} reached on an object opening",
                 self.max_state_stack_size
@@ -775,7 +778,10 @@ impl JsonLexer {
                 b'"' => {
                     // end of string
                     let result = Some(if let Some(error) = error {
-                        Err(error)
+                        Err(self.update_invalid_string_position(
+                            &input_buffer[..=next_byte_offset],
+                            error,
+                        ))
                     } else if let Some((mut string, read_until)) = string {
                         self.decode_utf8(
                             &input_buffer[read_until..next_byte_offset],
@@ -843,17 +849,16 @@ impl JsonLexer {
                         }
                         b'u' => {
                             next_byte_offset += 1;
-                            let val = input_buffer.get(next_byte_offset..next_byte_offset + 4)?;
-                            next_byte_offset += 4;
-                            let code_point = match read_hexa_char(val) {
+                            let code_point = read_hexa_char(input_buffer, &mut next_byte_offset)?;
+                            let code_point = match code_point {
                                 Ok(cp) => cp,
                                 Err(e) => {
                                     error = error.or_else(|| {
                                         let pos = self.file_offset
                                             + u64::try_from(next_byte_offset).unwrap();
-                                        Some(self.syntax_error(pos - 4..pos, e))
+                                        Some(self.syntax_error(pos..pos + 1, e))
                                     });
-                                    char::REPLACEMENT_CHARACTER.into()
+                                    continue;
                                 }
                             };
                             if let Some(c) = char::from_u32(code_point) {
@@ -872,11 +877,9 @@ impl JsonLexer {
                                             ),
                                         ))
                                     });
+                                    continue;
                                 }
-                                let val =
-                                    input_buffer.get(next_byte_offset..next_byte_offset + 6)?;
-                                next_byte_offset += 6;
-                                if !val.starts_with(b"\\u") {
+                                if !input_buffer[next_byte_offset..].starts_with(b"\\u") {
                                     error = error.or_else(|| {
                                         let pos = self.file_offset + u64::try_from(next_byte_offset).unwrap();
                                         Some(self.syntax_error(
@@ -887,16 +890,20 @@ impl JsonLexer {
                                             )
                                         ))
                                     });
+                                    continue;
                                 }
-                                let low_surrogate = match read_hexa_char(&val[2..]) {
+                                next_byte_offset += 2;
+                                let low_surrogate =
+                                    read_hexa_char(input_buffer, &mut next_byte_offset)?;
+                                let low_surrogate = match low_surrogate {
                                     Ok(cp) => cp,
                                     Err(e) => {
                                         error = error.or_else(|| {
                                             let pos = self.file_offset
                                                 + u64::try_from(next_byte_offset).unwrap();
-                                            Some(self.syntax_error(pos - 6..pos, e))
+                                            Some(self.syntax_error(pos..pos + 1, e))
                                         });
-                                        char::REPLACEMENT_CHARACTER.into()
+                                        continue;
                                     }
                                 };
                                 if !(0xDC00..=0xDFFF).contains(&low_surrogate) {
@@ -965,6 +972,30 @@ impl JsonLexer {
         }
     }
 
+    fn update_invalid_string_position(
+        &mut self,
+        input: &[u8],
+        mut error: JsonSyntaxError,
+    ) -> JsonSyntaxError {
+        // Track raw line breaks only after the whole token is available, so a refill can
+        // retry the token without counting any line breaks twice.
+        for (index, &byte) in input.iter().enumerate().skip(1) {
+            match byte {
+                b'\r' => self.file_line += 1,
+                b'\n' => self.file_line += u64::from(input[index - 1] != b'\r'),
+                _ => continue,
+            }
+            self.file_start_of_last_line = self.file_offset + u64::try_from(index).unwrap() + 1;
+            // The first error starts at or before the first line break, but can span it.
+            if self.file_start_of_last_line <= error.location.end.offset {
+                error.location.end.line = self.file_line;
+                error.location.end.column =
+                    error.location.end.offset - self.file_start_of_last_line;
+            }
+        }
+        error
+    }
+
     #[inline]
     fn read_constant(
         &mut self,
@@ -973,7 +1004,7 @@ impl JsonLexer {
         expected: &str,
         value: JsonToken<'static>,
     ) -> Option<Result<JsonToken<'static>, JsonSyntaxError>> {
-        if input_buffer.get(..expected.len())? == expected.as_bytes() {
+        if input_buffer.starts_with(expected.as_bytes()) {
             self.file_offset += u64::try_from(expected.len()).unwrap();
             return Some(Ok(value));
         }
@@ -1013,10 +1044,9 @@ impl JsonLexer {
                 next_byte_offset += read_digits(&input_buffer[next_byte_offset..], is_ending)?;
             }
             c => {
-                next_byte_offset += 1;
                 self.file_offset += u64::try_from(next_byte_offset).unwrap();
                 return Some(Err(self.syntax_error(
-                    self.file_offset - 1..self.file_offset,
+                    self.file_offset..self.file_offset + 1,
                     format!("A number is not allowed to start with '{}'", char::from(c)),
                 )));
             }
@@ -1030,11 +1060,10 @@ impl JsonLexer {
         {
             next_byte_offset += 1;
             let c = *input_buffer.get(next_byte_offset)?;
-            next_byte_offset += 1;
             if !c.is_ascii_digit() {
                 self.file_offset += u64::try_from(next_byte_offset).unwrap();
                 return Some(Err(self.syntax_error(
-                    self.file_offset - 1..self.file_offset,
+                    self.file_offset..self.file_offset + 1,
                     format!(
                         "A number fractional part must start with a digit and not '{}'",
                         char::from(c)
@@ -1055,11 +1084,10 @@ impl JsonLexer {
                 b'-' | b'+' => {
                     next_byte_offset += 1;
                     let c = *input_buffer.get(next_byte_offset)?;
-                    next_byte_offset += 1;
                     if !c.is_ascii_digit() {
                         self.file_offset += u64::try_from(next_byte_offset).unwrap();
                         return Some(Err(self.syntax_error(
-                            self.file_offset - 1..self.file_offset,
+                            self.file_offset..self.file_offset + 1,
                             format!(
                                 "A number exponential part must contain at least a digit, '{}' found",
                                 char::from(c)
@@ -1071,10 +1099,9 @@ impl JsonLexer {
                     next_byte_offset += 1;
                 }
                 c => {
-                    next_byte_offset += 1;
                     self.file_offset += u64::try_from(next_byte_offset).unwrap();
                     return Some(Err(self.syntax_error(
-                        self.file_offset - 1..self.file_offset,
+                        self.file_offset..self.file_offset + 1,
                         format!(
                             "A number exponential part must start with +, - or a digit, '{}' found",
                             char::from(c)
@@ -1120,23 +1147,25 @@ impl JsonLexer {
 }
 
 #[inline]
-fn read_hexa_char(input: &[u8]) -> Result<u32, String> {
+fn read_hexa_char(input: &[u8], offset: &mut usize) -> Option<Result<u32, String>> {
     let mut value = 0;
-    for c in input.iter().copied() {
+    for _ in 0..4 {
+        let c = *input.get(*offset)?;
         value = value * 16
             + match c {
                 b'0'..=b'9' => u32::from(c) - u32::from(b'0'),
                 b'a'..=b'f' => u32::from(c) - u32::from(b'a') + 10,
                 b'A'..=b'F' => u32::from(c) - u32::from(b'A') + 10,
                 _ => {
-                    return Err(format!(
+                    return Some(Err(format!(
                         "Unexpected character in a unicode escape: '{}'",
                         char::from(c)
-                    ))
+                    )));
                 }
-            }
+            };
+        *offset += 1;
     }
-    Ok(value)
+    Some(Ok(value))
 }
 
 #[inline]
@@ -1194,6 +1223,8 @@ pub struct JsonSyntaxError {
 
 impl JsonSyntaxError {
     /// The location of the error inside of the file.
+    ///
+    /// A range starting at the end of the input is empty.
     #[inline]
     pub fn location(&self) -> Range<TextPosition> {
         self.location.clone()

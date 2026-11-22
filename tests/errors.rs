@@ -4,6 +4,13 @@ use json_event_parser::{SliceJsonParser, WriterJsonSerializer};
 fn test_recovery() {
     let entries = [
         (b"[nonono]".as_slice(), "[]"),
+        (b"[t]", "[]"),
+        (b"[-]", "[]"),
+        (b"[1.]", "[]"),
+        (b"[1e]", "[]"),
+        (b"[1e+]", "[]"),
+        (b"[1.true]", "[true]"),
+        (b"[1e+\ntrue]", "[true]"),
         (b"[a]", "[]"),
         (b"[1,]", "[1]"),
         (b"{\"foo\":1,}", "{\"foo\":1}"),
@@ -11,6 +18,11 @@ fn test_recovery() {
         (b"[1 2]", "[1,2]"),
         (b"[\"\x00\"]", "[]"),
         (b"[\"\\uD888\\u1234\"]", "[]"),
+        (b"[\"\\uD800\",true]", "[true]"),
+        (b"[\"\\uDC00\",true]", "[true]"),
+        (b"[\"\\u12\",true]", "[true]"),
+        (b"[\"\\uD800\\u12\",true]", "[true]"),
+        (b"[\"\\uD800\\n\",true]", "[true]"),
     ];
 
     for (input, expected_output) in entries {
