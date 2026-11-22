@@ -159,18 +159,12 @@ impl LowLevelJsonSerializer {
                 self.state_stack.push(JsonState::OpenArray);
                 write.write_all(b"[")
             }
-            JsonEvent::EndArray => match self.state_stack.pop() {
-                Some(JsonState::OpenArray) | Some(JsonState::ContinuationArray) => {
+            JsonEvent::EndArray => match self.state_stack.last() {
+                Some(JsonState::OpenArray | JsonState::ContinuationArray) => {
+                    self.state_stack.pop();
                     write.write_all(b"]")
                 }
-                Some(s) => {
-                    self.state_stack.push(s);
-                    Err(Error::new(
-                        ErrorKind::InvalidInput,
-                        "Closing a not opened array",
-                    ))
-                }
-                None => Err(Error::new(
+                _ => Err(Error::new(
                     ErrorKind::InvalidInput,
                     "Closing a not opened array",
                 )),
@@ -180,18 +174,12 @@ impl LowLevelJsonSerializer {
                 self.state_stack.push(JsonState::OpenObject);
                 write.write_all(b"{")
             }
-            JsonEvent::EndObject => match self.state_stack.pop() {
-                Some(JsonState::OpenObject) | Some(JsonState::ContinuationObject) => {
+            JsonEvent::EndObject => match self.state_stack.last() {
+                Some(JsonState::OpenObject | JsonState::ContinuationObject) => {
+                    self.state_stack.pop();
                     write.write_all(b"}")
                 }
-                Some(s) => {
-                    self.state_stack.push(s);
-                    Err(Error::new(
-                        ErrorKind::InvalidInput,
-                        "Closing a not opened object",
-                    ))
-                }
-                None => Err(Error::new(
+                _ => Err(Error::new(
                     ErrorKind::InvalidInput,
                     "Closing a not opened object",
                 )),
@@ -215,25 +203,20 @@ impl LowLevelJsonSerializer {
     }
 
     fn before_value(&mut self, mut write: impl Write) -> Result<()> {
-        match self.state_stack.pop() {
-            Some(JsonState::OpenArray) => {
-                self.state_stack.push(JsonState::ContinuationArray);
+        match self.state_stack.last_mut() {
+            Some(state @ JsonState::OpenArray) => {
+                *state = JsonState::ContinuationArray;
                 Ok(())
             }
-            Some(JsonState::ContinuationArray) => {
-                self.state_stack.push(JsonState::ContinuationArray);
-                write.write_all(b",")?;
+            Some(JsonState::ContinuationArray) => write.write_all(b","),
+            Some(JsonState::OpenObject | JsonState::ContinuationObject) => Err(Error::new(
+                ErrorKind::InvalidInput,
+                "Object key expected, string found",
+            )),
+            Some(JsonState::ObjectValue) => {
+                self.state_stack.pop();
                 Ok(())
             }
-            Some(last_state @ JsonState::OpenObject)
-            | Some(last_state @ JsonState::ContinuationObject) => {
-                self.state_stack.push(last_state);
-                Err(Error::new(
-                    ErrorKind::InvalidInput,
-                    "Object key expected, string found",
-                ))
-            }
-            Some(JsonState::ObjectValue) => Ok(()),
             None => {
                 if self.element_written {
                     Err(Error::new(
