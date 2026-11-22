@@ -35,7 +35,7 @@ impl<W: Write> WriterJsonSerializer<W> {
     }
 
     pub fn finish(self) -> Result<W> {
-        self.writer.validate_eof()?;
+        self.writer.finish()?;
         Ok(self.write)
     }
 }
@@ -87,7 +87,7 @@ impl<W: AsyncWrite + Unpin> TokioAsyncWriterJsonSerializer<W> {
 
     pub fn finish(self) -> Result<W> {
         self.check_for_failed_write()?;
-        self.writer.validate_eof()?;
+        self.writer.finish()?;
         Ok(self.write)
     }
 
@@ -116,6 +116,7 @@ impl<W: AsyncWrite + Unpin> TokioAsyncWriterJsonSerializer<W> {
 /// writer.serialize_event(JsonEvent::ObjectKey("foo".into()), &mut output)?;
 /// writer.serialize_event(JsonEvent::Number("1".into()), &mut output)?;
 /// writer.serialize_event(JsonEvent::EndObject, &mut output)?;
+/// writer.finish()?;
 ///
 /// assert_eq!(output.as_slice(), b"{\"foo\":1}");
 /// # std::io::Result::Ok(())
@@ -247,7 +248,10 @@ impl LowLevelJsonSerializer {
         }
     }
 
-    fn validate_eof(&self) -> Result<()> {
+    /// Checks that the event stream contains a root value and all arrays and objects are closed.
+    ///
+    /// Call this after all event writes have succeeded.
+    pub fn finish(self) -> Result<()> {
         if !self.state_stack.is_empty() {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
