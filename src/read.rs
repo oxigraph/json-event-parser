@@ -483,19 +483,11 @@ impl LowLevelJsonParser {
         token: JsonToken<'a>,
     ) -> (Option<JsonEvent<'a>>, Option<String>) {
         match self.state_stack.pop() {
-            Some(JsonState::ObjectKeyOrEnd) => {
+            Some(state @ (JsonState::ObjectKeyOrEnd | JsonState::ObjectKey)) => {
                 if token == JsonToken::ClosingCurlyBracket {
-                    (Some(JsonEvent::EndObject), None)
-                } else {
-                    if let Err(e) = self.push_state_stack(JsonState::ObjectKey) {
-                        return (None, Some(e));
-                    }
-                    self.apply_new_token(token)
-                }
-            }
-            Some(JsonState::ObjectKey) => {
-                if token == JsonToken::ClosingCurlyBracket {
-                    return (Some(JsonEvent::EndObject), Some("Trailing commas are not allowed".into()));
+                    let error = matches!(state, JsonState::ObjectKey)
+                        .then(|| "Trailing commas are not allowed".into());
+                    return (Some(JsonEvent::EndObject), error);
                 }
                 if let Err(e) = self.push_state_stack(JsonState::ObjectColon) {
                     return (None, Some(e));
@@ -530,18 +522,11 @@ impl LowLevelJsonParser {
                 JsonToken::ClosingCurlyBracket => (Some(JsonEvent::EndObject), None),
                 _ => (None, Some("Object values must be followed by a comma to add a new value or a curly bracket to end the object".into())),
             },
-            Some(JsonState::ArrayValueOrEnd) =>{
+            Some(state @ (JsonState::ArrayValueOrEnd | JsonState::ArrayValue)) => {
                 if token == JsonToken::ClosingSquareBracket {
-                    return (Some(JsonEvent::EndArray), None);
-                }
-                if let Err(e) = self.push_state_stack(JsonState::ArrayValue) {
-                    return (None, Some(e));
-                }
-                self.apply_new_token(token)
-            }
-            Some(JsonState::ArrayValue) => {
-                if token == JsonToken::ClosingSquareBracket {
-                    return (Some(JsonEvent::EndArray), Some("Trailing commas are not allowed".into()));
+                    let error = matches!(state, JsonState::ArrayValue)
+                        .then(|| "Trailing commas are not allowed".into());
+                    return (Some(JsonEvent::EndArray), error);
                 }
                 if let Err(e) = self.push_state_stack(JsonState::ArrayCommaOrEnd) {
                     return (None, Some(e));
@@ -670,14 +655,14 @@ impl JsonLexer {
     ) -> Option<Result<JsonToken<'a>, JsonSyntaxError>> {
         // We remove BOM at the beginning
         if self.is_start {
-            if input_buffer.len() < 3 && !is_ending {
+            const BOM: &[u8] = b"\xEF\xBB\xBF";
+            if let Some(rest) = input_buffer.strip_prefix(BOM) {
+                input_buffer = rest;
+                self.file_offset += 3;
+            } else if !is_ending && BOM.starts_with(input_buffer) {
                 return None;
             }
             self.is_start = false;
-            if input_buffer.starts_with(&[0xEF, 0xBB, 0xBF]) {
-                input_buffer = &input_buffer[3..];
-                self.file_offset += 3;
-            }
         }
 
         // We skip whitespaces
@@ -918,26 +903,12 @@ impl JsonLexer {
                                             ),
                                         ))
                                     });
+                                    continue;
                                 }
                                 let code_point = 0x10000
                                     + ((high_surrogate & 0x03FF) << 10)
                                     + (low_surrogate & 0x03FF);
-                                if let Some(c) = char::from_u32(code_point) {
-                                    string.push(c)
-                                } else {
-                                    string.push(char::REPLACEMENT_CHARACTER);
-                                    error = error.or_else(|| {
-                                        let pos = self.file_offset
-                                            + u64::try_from(next_byte_offset).unwrap();
-                                        Some(self.syntax_error(
-                                            pos - 12..pos,
-                                            format!(
-                                                "\\u{:X}\\u{:X} is an invalid surrogate pair",
-                                                high_surrogate, low_surrogate
-                                            ),
-                                        ))
-                                    });
-                                }
+                                string.push(char::from_u32(code_point).unwrap());
                             }
                         }
                         c => {
