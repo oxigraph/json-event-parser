@@ -1,3 +1,23 @@
+## [0.3.0] - 2026-11-24
+
+### Added
+
+* `LowLevelJsonSerializer::finish()` checks that a root value was written and that every array and object was closed.
+
+### Removed
+
+* Removed `SliceJsonParser::parse_next()`. Use `next()` or iterate over the parser directly.
+* Removed `JsonEvent::Eof`. Parsers now signal end of input with `None`.
+* Removed the deprecated type aliases and the `read_next_event` and `write_event` methods.
+
+### Changed
+
+* `SliceJsonParser` now implements `Iterator<Item = Result<JsonEvent<'a>, JsonSyntaxError>>`.
+* `ReaderJsonParser::parse_next()` and `TokioAsyncReaderJsonParser::parse_next()` now return `Option<Result<JsonEvent<'_>, JsonParseError>>`.
+* `LowLevelJsonParserResult::event` also uses `None` at end of input. While more input is expected, `None` still means the parser needs more bytes.
+* Reader buffers grow geometrically as needed up to the configured limit.
+* `TokioAsyncWriterJsonSerializer` rejects further events and fails `finish()` after an output write fails.
+
 ## [0.2.3] - 2026-02-06
 
 ### Changed
